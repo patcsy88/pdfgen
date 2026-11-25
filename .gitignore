@@ -3,3 +3,5 @@ target/
 bin/
 obj/
 graphify-out/
+node/node_modules/
+node/test-output/

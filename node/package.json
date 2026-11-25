@@ -1,0 +1,26 @@
+{
+  "name": "pdfgen",
+  "version": "0.1.0",
+  "description": "Node.js bindings for pdfgen, loading the C ABI library through koffi",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": "./src/index.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "license-check": "license-checker-rseidelsohn --production --onlyAllow \"MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;Unicode-3.0;Zlib\"",
+    "license-check:all": "license-checker-rseidelsohn --onlyAllow \"MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;Unicode-3.0;Zlib;BlueOak-1.0.0;CC0-1.0;CC-BY-3.0;MIT OR Apache-2.0;(MIT AND CC-BY-3.0)\""
+  },
+  "dependencies": {
+    "koffi": "3.3.8"
+  },
+  "devDependencies": {
+    "license-checker-rseidelsohn": "5.0.1"
+  }
+}

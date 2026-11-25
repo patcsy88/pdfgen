@@ -26,6 +26,7 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
 | `qpdf` | the tests call `qpdf --check` on every PDF they produce | 11.3.0 |
 | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) | license check | 0.22.1 |
 | .NET SDK 10 | the wrapper and its tests | 10.0.404 |
+| Node.js | the Node wrapper and its tests (`engines` is `>=24`) | 26.13.1, not 24: see [Use from Node.js](#use-from-nodejs) |
 | Python 3 | only to regenerate font data | 3.11.2 |
 
 Debian/Ubuntu:
@@ -56,6 +57,17 @@ cargo deny check licenses
 
 # The native library the .NET tests load. It must exist before `dotnet test`.
 cargo build --release -p ffi            # -> target/release/libpdfgen_ffi.so
+```
+
+```bash
+# Node.js: needs the release library above and qpdf on PATH.
+cd node && npm ci && npm test           # writes node/test-output/*.pdf
+
+# Arlington + content-stream checks over those PDFs (fails if the directory is empty).
+cd .. && PDFGEN_CHECK_DIR=node/test-output cargo test -p pdfgen-core --test external_pdfs
+
+# npm licenses: shipped dependencies, then the whole tree including dev tools.
+cd node && npm run license-check && npm run license-check:all
 ```
 
 The .NET build fails with a clear message if that library is missing. NuGet
@@ -129,10 +141,44 @@ Failures throw `PdfException` with the native message and the C error code in
 must be next to your assembly or on the loader path; the test project copies it
 from `target/release/`.
 
+## Use from Node.js
+
+The wrapper in `node/` loads `libpdfgen_ffi.so` through [koffi](https://koffi.dev)
+(MIT), the same C ABI the .NET wrapper uses. It is an ES module with no build step.
+
+```js
+import { writeFileSync } from 'node:fs';
+import { PdfDocument, PdfTable, Font } from './node/src/index.js';
+
+using doc = new PdfDocument();
+doc.addText('Quarterly report', Font.HelveticaBold, 20);
+
+using table = new PdfTable([80, 120], 10);
+table.setHeader('Region', 'Total').addRow('North', '1200');
+doc.addTable(table);              // copies the table; you still dispose it
+
+writeFileSync('report.pdf', doc.render());   // render() returns a Buffer
+```
+
+Failures throw `PdfError` with the native message and the C error code in `code`.
+Call `dispose()` (or use `using`) to free native memory; a finalizer frees anything
+left over. The library path defaults to `target/release/libpdfgen_ffi.so` in this
+repository; set `PDFGEN_LIB` to load it from elsewhere.
+
+The goal asked for Node 24 LTS. Only Node 26.13.1 was available on the machine the
+wrapper was developed on, so the tests have **not** been run on Node 24.
+`package.json` declares `"node": ">=24"`.
+
+The Node tests write every PDF to `node/test-output/` (git-ignored) and require
+`qpdf --check` to pass on each. The Arlington and content-stream checks are Rust
+code, so they run separately over that directory with the `external_pdfs` test shown
+under Build and test.
+
 ## C ABI
 
 Library name `pdfgen_ffi`. There is no generated header; the functions are
-declared in `ffi/src/lib.rs` and, as P/Invoke, in `dotnet/PdfGen/Native.cs`.
+declared in `ffi/src/lib.rs` and, as P/Invoke, in `dotnet/PdfGen/Native.cs`, and,
+for koffi, in `node/src/native.js`.
 
 - Handles are opaque pointers. Free each with its matching `*_free`; passing NULL
   to a `*_free` function is a no-op.
@@ -240,7 +286,16 @@ pdfcpu version
 | pdfcpu (optional external tool, not shipped) | Apache-2.0 |
 | Adobe core-14 AFM files (`core/afm/`) | Adobe's own notice, in `core/afm/LICENSE`: use, copy and distribute for any purpose if all copyright notices are kept and the AFM files are never distributed without that `LICENSE` file |
 | NuGet test packages (13) | MIT or Apache-2.0 |
+| `koffi` 3.3.8 (Node wrapper, shipped dependency) | MIT |
+| `@koromix/koffi-linux-x64` 3.3.8 (koffi's prebuilt binary, shipped dependency) | MIT |
+| npm dev tools (`license-checker-rseidelsohn` and its dependencies, 130 packages in all, test and CI only) | ISC 55, MIT 48, BlueOak-1.0.0 12, Apache-2.0 9, BSD-2-Clause 2, BSD-3-Clause 1, CC-BY-3.0 1, CC0-1.0 1, (MIT AND CC-BY-3.0) 1 |
 
 `cargo deny check licenses` covers the Rust crates only. It cannot see the AFM
-files or the NuGet packages. The built shared library links dynamically against
-glibc and `libgcc_s` (`ldd target/release/libpdfgen_ffi.so`).
+files, the NuGet packages or the npm packages. The built shared library links
+dynamically against glibc and `libgcc_s` (`ldd target/release/libpdfgen_ffi.so`).
+
+The npm check on shipped dependencies uses the seven-license allowlist (MIT,
+Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib) and exits 0. The
+dev-tool tree contains BlueOak-1.0.0, CC-BY-3.0, CC0-1.0 and (MIT AND CC-BY-3.0)
+packages, so `npm run license-check:all` adds those four to the allowlist; with only
+the seven licenses it exits 1. None of the dev tools is shipped.
