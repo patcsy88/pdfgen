@@ -2,3 +2,4 @@ target/
 .dotnet-home/
 bin/
 obj/
+graphify-out/
