@@ -576,9 +576,20 @@ impl Writer {
             debug_assert_eq!(*id, self.offsets.iter().position(|o| o.0 == *id).unwrap() + 1);
             self.buf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
         }
+        // ISO 32000-2 14.4: /ID is required in PDF 2.0, two byte strings of at least
+        // 16 bytes. Derived from the body so output stays deterministic; both halves
+        // are equal because every file is a new, unmodified document.
+        let id: String = [0xcbf2_9ce4_8422_2325u64, 0x6c62_272e_07bb_0142]
+            .iter()
+            .map(|&seed| format!("{:016X}", fnv1a64(seed, &self.buf)))
+            .collect();
         self.buf.extend_from_slice(
-            format!("trailer\n<< /Size {n} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+            format!("trailer\n<< /Size {n} /Root 1 0 R /ID [<{id}> <{id}>] >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
         );
         self.buf
     }
+}
+
+fn fnv1a64(seed: u64, data: &[u8]) -> u64 {
+    data.iter().fold(seed, |h, &b| (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01B3))
 }

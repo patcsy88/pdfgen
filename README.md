@@ -175,18 +175,58 @@ means adding it to `Font` and `Font::metrics` in `core/src/lib.rs`.
 
 ## What is and is not validated
 
-Every PDF the tests produce is checked with `qpdf --check`, which verifies
-structure and decodes streams. `qpdf` is not an ISO 32000 conformance validator.
-`core/tests/pdf.rs` adds checks for the rules the writer relies on: the
-`%PDF-2.0` header and binary comment, xref entries pointing at their objects,
-trailer `/Size` and `/Root`, stream `/Length`, page tree, and that each font has
-a `FontDescriptor` and a `/Widths` array equal to the widths layout used.
+Every PDF the tests produce (written to `target/test-pdfs/`) goes through three
+layers, all inside `cargo test`, plus an optional fourth:
 
-Not covered: content-stream operator validity, the complete list of keys PDF 2.0
-requires in a font descriptor, and any rendering. The PDF 2.0 rules were taken from
-the PDF Association's errata for ISO 32000-2, not from the standard's own text. No
-trailer `/ID` is written. Only a grayscale JPEG goes through the full `qpdf` decode
-in tests; RGB JPEG is tested for header parsing only.
+1. **`qpdf --check`**: syntax, xref, stream lengths, stream decoding.
+2. **Arlington PDF Model** (`core/tests/common/mod.rs`): the PDF is parsed with
+   `lopdf` and walked from the trailer. Each object is checked against the PDF
+   Association's machine-readable model of ISO 32000-2, vendored in
+   `core/tests/arlington/`. The checks cover key types, required keys (with
+   inheritance), direct versus indirect references, allowed values,
+   `SinceVersion` and `DeprecatedIn` against PDF 2.0, keys the model doesn't
+   define, and special-case predicates. A predicate the checker can't evaluate, a
+   link to a model that isn't vendored, or an object not reachable from the
+   trailer is reported as an error, never skipped.
+3. **Content streams** (`core/tests/common/content.rs`): each operator is checked
+   against the PDF operator table, with operand count and types, the
+   graphics-object state machine (ISO 32000-2 Figure 9), and balanced `q`/`Q`,
+   `BT`/`ET` and marked content. Resource names for `Tf`, `Do`, `gs`, `cs`, `sh`
+   and `BDC` must resolve, and shown bytes must fall within the font's
+   `FirstChar`..`LastChar`.
+4. **pdfcpu strict mode** (optional, needs pdfcpu installed): run
+   `tools/validate-pdfcpu.sh` after `cargo test`.
+
+Both checkers have tests of their own: valid files that must pass and seeded
+violations that must be reported.
+
+Limits, so "passes" isn't read as "certified":
+
+- **Model subset:** only the 16 Arlington models reachable from objects this
+  writer emits are vendored. A new object kind fails the check until its model is
+  added.
+- **Arlington's own scope:** Arlington doesn't cover every prose rule in ISO
+  32000-2.
+- **Operator table:** written from the standard's operator summary, not checked
+  line by line against the normative text.
+- **pdfcpu:** its documentation calls its PDF 2.0 validation "rudimentary".
+- **Rendering:** not tested.
+- **JPEG decode:** only a grayscale JPEG goes through the full `qpdf` decode;
+  RGB JPEG is tested for header parsing only.
+
+### Installing pdfcpu (optional)
+
+pdfcpu 0.16.4 needs Go 1.26. Debian 12 ships Go 1.19 (1.23 in backports), so
+use the prebuilt release instead of apt:
+
+```bash
+curl -LO https://github.com/pdfcpu/pdfcpu/releases/download/v0.16.4/pdfcpu_0.16.4_Linux_x86_64.tar.xz
+curl -LO https://github.com/pdfcpu/pdfcpu/releases/download/v0.16.4/checksums.txt
+sha256sum --ignore-missing -c checksums.txt
+tar -xf pdfcpu_0.16.4_Linux_x86_64.tar.xz
+install -D "$(find . -name pdfcpu -type f -perm -u+x | head -1)" ~/.local/bin/pdfcpu
+pdfcpu version
+```
 
 ## Licenses
 
@@ -195,6 +235,9 @@ in tests; RGB JPEG is tested for header parsing only.
 | pdfgen (this repository) | MIT OR Apache-2.0 |
 | `miniz_oxide` 0.8.9 (Flate compression) | MIT OR Zlib OR Apache-2.0 |
 | `adler2` 2.0.1 (via `miniz_oxide`) | 0BSD OR MIT OR Apache-2.0 |
+| `lopdf` 0.36 and its dependencies (tests only, dev-dependency) | MIT and/or Apache-2.0, checked by `cargo deny` |
+| Arlington PDF Model TSV subset (`core/tests/arlington/`, tests only) | Apache-2.0, `LICENSE` and `NOTICE.txt` kept beside the files, source commit in `SOURCE.txt` |
+| pdfcpu (optional external tool, not shipped) | Apache-2.0 |
 | Adobe core-14 AFM files (`core/afm/`) | Adobe's own notice, in `core/afm/LICENSE`: use, copy and distribute for any purpose if all copyright notices are kept and the AFM files are never distributed without that `LICENSE` file |
 | NuGet test packages (13) | MIT or Apache-2.0 |
 

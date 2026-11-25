@@ -1,9 +1,15 @@
+mod common;
+
 use pdfgen_core::{Block, Document, Error, Font, Image, Table};
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Generated PDFs land in `target/test-pdfs/` so external validators
+/// (`tools/validate-pdfcpu.sh`) can run over exactly what the tests checked.
 fn out(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/test-pdfs");
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join(name)
 }
 
 fn qpdf(args: &[&str]) -> std::process::Output {
@@ -13,10 +19,13 @@ fn qpdf(args: &[&str]) -> std::process::Output {
         .expect("qpdf must be installed to run these tests (apt install qpdf)")
 }
 
-/// Writes the PDF, requires `qpdf --check` to exit 0, returns the path.
+/// Writes the PDF, requires `qpdf --check` to exit 0 and zero Arlington-model
+/// (ISO 32000-2) violations, returns the path.
 fn write_and_check(name: &str, doc: &Document) -> PathBuf {
     let path = out(name);
-    std::fs::write(&path, doc.render().unwrap()).unwrap();
+    let bytes = doc.render().unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    common::assert_conformant(name, &bytes);
     let r = qpdf(&["--check", path.to_str().unwrap()]);
     assert!(
         r.status.success(),
@@ -492,5 +501,124 @@ fn page_tree_is_consistent() {
         assert!(p.contains("/Type /Page"));
         assert!(p.contains("/Parent 2 0 R"));
         assert!(p.contains("/MediaBox [0 0 595 842]"));
+    }
+}
+
+/// Builds a classic-xref PDF from object bodies (ids 1..) and a trailer dict body.
+fn raw_pdf(header: &str, objs: &[&str], trailer: &str) -> Vec<u8> {
+    let mut b = format!("{header}\n%\u{e2}\u{e3}\n").into_bytes();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(b.len());
+        b.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = b.len();
+    b.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        b.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    b.extend_from_slice(format!("trailer\n<< /Size {} {trailer} >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    b
+}
+
+const ID: &str = "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]";
+const PAGE: &str = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << >> >>";
+
+/// The checker must accept a minimal conforming file, otherwise every
+/// negative case below would pass for the wrong reason.
+#[test]
+fn arlington_accepts_minimal_valid_file() {
+    let pdf = raw_pdf("%PDF-2.0", &["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", PAGE], &format!("/Root 1 0 R {ID}"));
+    assert_eq!(common::arlington_errors(&pdf), Vec::<String>::new());
+}
+
+#[test]
+fn arlington_rejects_known_violations() {
+    let cat = "<< /Type /Catalog /Pages 2 0 R >>";
+    let pages = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+    let font = |extra: &str| format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << /Font << /F1 4 0 R >> >> >>{extra}");
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        ("missing /ID", raw_pdf("%PDF-2.0", &[cat, pages, PAGE], "/Root 1 0 R"), "trailer/ID: required"),
+        ("short /ID", raw_pdf("%PDF-2.0", &[cat, pages, PAGE], "/Root 1 0 R /ID [<00> <00>]"), "StringLength(0)>=16"),
+        ("1.7 header", raw_pdf("%PDF-1.7", &[cat, pages, PAGE], &format!("/Root 1 0 R {ID}")), "not %PDF-2.0"),
+        ("wrong catalog /Type", raw_pdf("%PDF-2.0", &["<< /Type /Katalog /Pages 2 0 R >>", pages, PAGE], &format!("/Root 1 0 R {ID}")), "not one of [Catalog]"),
+        ("undefined key", raw_pdf("%PDF-2.0", &["<< /Type /Catalog /Pages 2 0 R /Bogus 1 >>", pages, PAGE], &format!("/Root 1 0 R {ID}")), "Bogus: key not defined in Catalog"),
+        ("missing MediaBox", raw_pdf("%PDF-2.0", &[cat, pages, "<< /Type /Page /Parent 2 0 R /Resources << >> >>"], &format!("/Root 1 0 R {ID}")), "MediaBox: required"),
+        ("inherited MediaBox is fine", raw_pdf("%PDF-2.0", &[cat, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 1 1] >>", "<< /Type /Page /Parent 2 0 R /Resources << >> >>"], &format!("/Root 1 0 R {ID}")), ""),
+        ("direct Pages", raw_pdf("%PDF-2.0", &["<< /Type /Catalog /Pages << /Type /Pages /Kids [] /Count 0 >> >>"], &format!("/Root 1 0 R {ID}")), "Pages: must be an indirect reference"),
+        ("bad Rotate", raw_pdf("%PDF-2.0", &[cat, pages, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << >> /Rotate 45 >>"], &format!("/Root 1 0 R {ID}")), "Rotate mod 90"),
+        ("non-rectangle MediaBox", raw_pdf("%PDF-2.0", &[cat, pages, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10] /Resources << >> >>"], &format!("/Root 1 0 R {ID}")), "is not of type `rectangle`"),
+        ("font without Widths in 2.0", raw_pdf("%PDF-2.0", &[cat, pages, &font(""), "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"], &format!("/Root 1 0 R {ID}")), "Widths: required"),
+        ("Widths length mismatch", raw_pdf("%PDF-2.0", &[cat, pages, &font(""), "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 33 /Widths [1] /FontDescriptor 5 0 R >>", "<< /Type /FontDescriptor /FontName /Helvetica /Flags 32 /FontBBox [0 0 1 1] /ItalicAngle 0 /Ascent 1 /Descent 0 /StemV 1 >>"], &format!("/Root 1 0 R {ID}")), "ArrayLength(Widths)"),
+        ("FontName differs from BaseFont", raw_pdf("%PDF-2.0", &[cat, pages, &font(""), "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 32 /Widths [1] /FontDescriptor 5 0 R >>", "<< /Type /FontDescriptor /FontName /Courier /Flags 32 /FontBBox [0 0 1 1] /ItalicAngle 0 /Ascent 1 /Descent 0 /StemV 1 >>"], &format!("/Root 1 0 R {ID}")), "FontName==parent::@BaseFont"),
+        ("reserved Flags bit", raw_pdf("%PDF-2.0", &[cat, pages, &font(""), "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 32 /Widths [1] /FontDescriptor 5 0 R >>", "<< /Type /FontDescriptor /FontName /Helvetica /Flags 288 /FontBBox [0 0 1 1] /ItalicAngle 0 /Ascent 1 /Descent 0 /StemV 1 >>"], &format!("/Root 1 0 R {ID}")), "BitsClear(8,16)"),
+        ("positive Descent", raw_pdf("%PDF-2.0", &[cat, pages, &font(""), "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 32 /Widths [1] /FontDescriptor 5 0 R >>", "<< /Type /FontDescriptor /FontName /Helvetica /Flags 32 /FontBBox [0 0 1 1] /ItalicAngle 0 /Ascent 1 /Descent 5 /StemV 1 >>"], &format!("/Root 1 0 R {ID}")), "Descent<=0"),
+        ("DCT image with 4 bits", raw_pdf("%PDF-2.0", &[cat, pages, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << /XObject << /Im1 4 0 R >> >> >>", "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 4 /Filter /DCTDecode /Length 1 >>\nstream\nx\nendstream"], &format!("/Root 1 0 R {ID}")), "must be 8"),
+        ("unreachable object", raw_pdf("%PDF-2.0", &[cat, pages, PAGE, "<< /Orphan true >>"], &format!("/Root 1 0 R {ID}")), "object 4 0 R is not reachable"),
+    ];
+    for (what, pdf, want) in cases {
+        let errs = common::arlington_errors(&pdf);
+        if want.is_empty() {
+            assert!(errs.is_empty(), "{what}: expected no errors, got {errs:#?}");
+        } else {
+            assert!(errs.iter().any(|e| e.contains(want)), "{what}: expected an error containing {want:?}, got {errs:#?}");
+        }
+    }
+}
+
+/// One page whose content stream is `content` (uncompressed), with font /F1
+/// (Helvetica, codes 32..126) and image /Im1 in its resources.
+fn page_with_content(content: &str) -> Vec<u8> {
+    let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> >>";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len() + 1);
+    raw_pdf(
+        "%PDF-2.0",
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            page,
+            &stream,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 126 >>",
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\nx\nendstream",
+        ],
+        &format!("/Root 1 0 R {ID}"),
+    )
+}
+
+#[test]
+fn content_checker_accepts_valid_and_rejects_known_violations() {
+    let ok = "q 1 0 0 1 0 0 cm /Im1 Do Q BT /F1 12 Tf 1 2 Td (Hi) Tj [(a) -50 (b)] TJ ET 0.5 w 0 0 1 1 re S 0 0 m 1 1 l h f /Span BMC EMC";
+    assert_eq!(common::content::content_errors(&page_with_content(ok)), Vec::<String>::new());
+    let cases = [
+        ("BT (x) Tj ET", "before Tf"),
+        ("BT /F1 12 Tf ET", ""),
+        ("BT /F9 12 Tf ET", "/F9 is not in Resources /Font"),
+        ("/Im9 Do", "/Im9 is not in Resources /XObject"),
+        ("BT /F1 12 Tf (\\351) Tj ET", "byte 233 outside font FirstChar..LastChar 32..126"),
+        ("BT /F1 12 Tf 1 Td ET", "operands"),
+        ("BT /F1 Tf ET", "operands"),
+        ("(x) Tj", "not allowed in Page state"),
+        ("BT q Q ET", "not allowed in Text state"),
+        ("BT /F1 12 Tf (x) Tj", "ends in Text state"),
+        ("0 0 m 1 1 l", "ends in Path state"),
+        ("0 0 m BT ET", "not allowed in Path state"),
+        ("f", "not allowed in Page state"),
+        ("q", "q without matching Q"),
+        ("Q", "Q without matching q"),
+        ("EMC", "EMC without BMC/BDC"),
+        ("/Span BMC", "BMC/BDC without EMC"),
+        ("/Span /P1 BDC EMC", "/P1 is not in Resources /Properties"),
+        ("/CS0 cs", "/CS0 is not in Resources /ColorSpace"),
+        ("/DeviceRGB cs 1 0 0 sc", ""),
+        ("1 2 3 4 5 sc", "operands"),
+        ("0 0 Zz", "not a PDF 2.0 content operator"),
+    ];
+    for (src, want) in cases {
+        let errs = common::content::content_errors(&page_with_content(src));
+        if want.is_empty() {
+            assert!(errs.is_empty(), "`{src}`: expected no errors, got {errs:#?}");
+        } else {
+            assert!(errs.iter().any(|e| e.contains(want)), "`{src}`: expected an error containing {want:?}, got {errs:#?}");
+        }
     }
 }

@@ -1,0 +1,4 @@
+Subset of https://github.com/pdf-association/arlington-pdf-model
+commit cdc485e4238c55bbd6204f6fda31997245d54b71, directory tsv/latest.
+Files are unmodified. License: Apache-2.0 (see LICENSE, NOTICE.txt).
+Only the models reachable from the objects this crate writes are included.
