@@ -1,0 +1,16 @@
+[package]
+name = "ffi"
+description = "C ABI over pdfgen-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Library name differs from the package name so the shared object is
+# libpdfgen_ffi.so, not libffi.so (which collides with the system libffi).
+[lib]
+name = "pdfgen_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pdfgen-core = { path = "../core" }

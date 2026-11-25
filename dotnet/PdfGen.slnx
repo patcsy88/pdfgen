@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="PdfGen.Tests/PdfGen.Tests.csproj" />
+  <Project Path="PdfGen/PdfGen.csproj" />
+</Solution>

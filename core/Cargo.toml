@@ -1,0 +1,13 @@
+[package]
+name = "pdfgen-core"
+description = "Minimal PDF report generation: text, fonts, tables, images, page breaks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "pdfgen_core"
+
+[dependencies]
+miniz_oxide = "0.8"
