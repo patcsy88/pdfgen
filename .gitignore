@@ -5,3 +5,6 @@ obj/
 graphify-out/
 node/node_modules/
 node/test-output/
+python/test-output/
+__pycache__/
+python/*.egg-info/

@@ -27,7 +27,7 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
 | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) | license check | 0.22.1 |
 | .NET SDK 10 | the wrapper and its tests | 10.0.404 |
 | Node.js | the Node wrapper and its tests (`engines` is `>=24`) | 26.13.1, not 24: see [Use from Node.js](#use-from-nodejs) |
-| Python 3 | only to regenerate font data | 3.11.2 |
+| Python 3 | the Python wrapper and its tests (`requires-python` is `>=3.10`); also regenerates font data | 3.11.2 |
 
 Debian/Ubuntu:
 
@@ -68,6 +68,10 @@ cd .. && PDFGEN_CHECK_DIR=node/test-output cargo test -p pdfgen-core --test exte
 
 # npm licenses: shipped dependencies, then the whole tree including dev tools.
 cd node && npm run license-check && npm run license-check:all
+
+# Python: needs the release library above and qpdf on PATH. Standard library only.
+cd python && python3 -m unittest discover -s tests   # writes python/test-output/*.pdf
+cd .. && PDFGEN_CHECK_DIR=python/test-output cargo test -p pdfgen-core --test external_pdfs
 ```
 
 The .NET build fails with a clear message if that library is missing. NuGet
@@ -140,6 +144,39 @@ Failures throw `PdfException` with the native message and the C error code in
 `Code`. `PdfDocument` is not thread-safe; use one per thread. The native library
 must be next to your assembly or on the loader path; the test project copies it
 from `target/release/`.
+
+## Use from Python
+
+The wrapper in `python/pdfgen/` loads `libpdfgen_ffi.so` with `ctypes` (standard
+library, no third-party dependencies), the same C ABI the .NET and Node wrappers use.
+
+```python
+from pdfgen import PdfDocument, PdfTable, Font
+
+with PdfDocument() as doc:
+    doc.add_text("Quarterly report", Font.HELVETICA_BOLD, 20)
+
+    with PdfTable([80, 120], 10) as table:
+        table.set_header("Region", "Total").add_row("North", "1200")
+        doc.add_table(table)          # copies the table; you still close it
+
+    doc.save("report.pdf")            # or: pdf_bytes = doc.render()
+```
+
+Failures raise `PdfError` with the native message and the C error code in `code`.
+Arguments ctypes would silently mangle (NUL in a string, an out-of-range unsigned
+integer) raise `ValueError` before reaching the library. Use `with` or `close()` to
+free native memory; a finalizer frees anything left over. A closed object raises
+`ValueError`. The library path defaults to `target/release/libpdfgen_ffi.so` in this
+repository, found relative to the package source. Run from a checkout (for example
+`PYTHONPATH=python`), or set `PDFGEN_LIB` to load the library from elsewhere; a
+`pip install ./python` copy has no repository next to it and needs `PDFGEN_LIB`.
+The tests ran on Python 3.11.2 only; `requires-python` is `>=3.10` but 3.10 is untested.
+
+The Python tests write every PDF to `python/test-output/` (git-ignored) and require
+`qpdf --check` to pass on each. The Arlington and content-stream checks run
+separately over that directory with the `external_pdfs` test shown under Build and
+test.
 
 ## Use from Node.js
 
@@ -286,6 +323,7 @@ pdfcpu version
 | pdfcpu (optional external tool, not shipped) | Apache-2.0 |
 | Adobe core-14 AFM files (`core/afm/`) | Adobe's own notice, in `core/afm/LICENSE`: use, copy and distribute for any purpose if all copyright notices are kept and the AFM files are never distributed without that `LICENSE` file |
 | NuGet test packages (13) | MIT or Apache-2.0 |
+| Python wrapper (`python/`) | no third-party packages; standard-library `ctypes` only |
 | `koffi` 3.3.8 (Node wrapper, shipped dependency) | MIT |
 | `@koromix/koffi-linux-x64` 3.3.8 (koffi's prebuilt binary, shipped dependency) | MIT |
 | npm dev tools (`license-checker-rseidelsohn` and its dependencies, 130 packages in all, test and CI only) | ISC 55, MIT 48, BlueOak-1.0.0 12, Apache-2.0 9, BSD-2-Clause 2, BSD-3-Clause 1, CC-BY-3.0 1, CC0-1.0 1, (MIT AND CC-BY-3.0) 1 |
