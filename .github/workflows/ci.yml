@@ -6,6 +6,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*', 'go/v*']
   pull_request:
 
 permissions:
@@ -30,6 +31,13 @@ jobs:
       - run: cargo test --workspace --locked
       - name: The C header and every wrapper declare the same C ABI as ffi/src/lib.rs
         run: python3 tools/abi-check.py
+      - name: Every manifest carries the workspace version
+        run: python3 tools/version-check.py
+      - name: The release tag matches that version
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 tools/version-check.py --tag "$TAG"
       - uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4
         with:
           command: check licenses

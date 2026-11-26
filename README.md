@@ -86,6 +86,7 @@ cd go && go test ./...                               # writes go/test-output/*.p
 cd .. && PDFGEN_CHECK_DIR=go/test-output cargo test -p pdfgen-core --test external_pdfs
 cd go && ./license-check.sh                          # fails if any third-party module appears
 python3 tools/abi-check.py                           # every wrapper declares the same C ABI as ffi/src/lib.rs
+python3 tools/version-check.py                       # every manifest carries the workspace version in Cargo.toml
 ```
 
 The .NET build fails with a clear message if that library is missing. NuGet
@@ -106,14 +107,31 @@ Test PDFs are left in `target/tmp/` (Rust) and next to the test assembly
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests: one job each
-for Rust (tests, `tools/abi-check.py`, `cargo deny check licenses`), .NET, Node.js,
-Python (3.10 and 3.13), Java and Go (1.24 and stable). Each wrapper job builds the
-release library, runs the wrapper's tests and, except .NET, the `external_pdfs` checks.
+`.github/workflows/ci.yml` runs on pushes to `main`, on pushes of tags `v*` and `go/v*`,
+and on pull requests: one job each for Rust (tests, `tools/abi-check.py`,
+`tools/version-check.py`, `cargo deny check licenses`), .NET, Node.js, Python (3.10 and
+3.13), Java and Go (1.24 and stable). Each wrapper job builds the release library, runs
+the wrapper's tests and, except .NET, the `external_pdfs` checks.
 Every action is pinned to a commit SHA. The workflow passes `actionlint` and the same
 commands pass locally, but it has not yet run on GitHub: the first run may show
 failures that local runs cannot, such as the Temurin JDK 25 build, Node 24 and
 Python 3.10, none of which were tested locally.
+
+## Releasing
+
+The version is `version` under `[workspace.package]` in `Cargo.toml`. To release, change
+it there and in `Cargo.lock`, `node/package.json`, both version fields of
+`node/package-lock.json`, `python/pyproject.toml`, the project's own `<version>` in
+`java/pom.xml` and `<Version>` in `dotnet/PdfGen/PdfGen.csproj`. `core` and `ffi` inherit
+it. Then run `python3 tools/version-check.py`; it exits 1 and lists every site that
+differs. Nothing bumps the versions for you.
+
+The Go module has no version in its source. Go clients take it from a git tag, and since
+the module lives in `go/`, that tag must be `go/vX.Y.Z`. Push `vX.Y.Z` and `go/vX.Y.Z`
+on the same commit; CI runs `tools/version-check.py --tag` on each and fails if the
+tag differs from `Cargo.toml`. The `pdfgen.h` comment shows `0.1.0` only as an example
+and is not checked. No package is published to crates.io, NuGet, npm, PyPI or Maven by
+anything in this repository.
 
 ## Use from Rust
 
