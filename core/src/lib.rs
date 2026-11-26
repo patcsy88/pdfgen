@@ -25,7 +25,7 @@ pub enum Error {
     BadJpeg(String),
     /// Table has no columns, or a row has more cells than columns.
     BadTable(String),
-    /// A single table row is taller than a full page.
+    /// A table row is taller than a full page, or taller than a page together with the table header.
     RowTooTall,
 }
 
@@ -35,7 +35,7 @@ impl fmt::Display for Error {
             Error::BadImageData(m) => write!(f, "bad image data: {m}"),
             Error::BadJpeg(m) => write!(f, "bad jpeg: {m}"),
             Error::BadTable(m) => write!(f, "bad table: {m}"),
-            Error::RowTooTall => write!(f, "table row taller than a page"),
+            Error::RowTooTall => write!(f, "table row taller than a page (together with the header)"),
         }
     }
 }
@@ -127,7 +127,7 @@ impl Image {
         Ok(Image { width, height, data: ImageData::Gray(data) })
     }
 
-    /// Baseline/progressive JPEG, embedded unchanged. Gray and RGB only.
+    /// 8-bit baseline/progressive JPEG, embedded unchanged. Gray and RGB only.
     pub fn jpeg(bytes: Vec<u8>) -> Result<Image, Error> {
         let (width, height, components) = parse_jpeg(&bytes)?;
         if components != 1 && components != 3 {
@@ -181,6 +181,10 @@ fn parse_jpeg(b: &[u8]) -> Result<(u32, u32, u8), Error> {
         if matches!(m, 0xC0..=0xC2) {
             if i + 9 + 1 > b.len() || len < 8 {
                 return Err(Error::BadJpeg("truncated SOF".into()));
+            }
+            let p = b[i + 4];
+            if p != 8 {
+                return Err(Error::BadJpeg(format!("{p}-bit samples unsupported, only 8-bit")));
             }
             let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as u32;
             let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as u32;
@@ -248,6 +252,9 @@ impl Document {
     }
 
     /// Lay out all blocks and serialise a PDF 1.4 file.
+    ///
+    /// Fails with [`Error::RowTooTall`] if a table row, together with the table's header if it has one,
+    /// is taller than a page.
     pub fn render(&self) -> Result<Vec<u8>, Error> {
         let mut lay = Layout::new();
         for b in &self.blocks {
@@ -260,6 +267,20 @@ impl Document {
         }
         Ok(lay.finish())
     }
+}
+
+/// Wraps each cell of `row` into its column and returns the lines plus the row height.
+fn layout_row(row: &[String], is_header: bool, t: &Table) -> (Vec<Vec<String>>, f32) {
+    let font = if is_header { Font::HelveticaBold } else { Font::Helvetica };
+    let size = t.font_size;
+    let cells: Vec<Vec<String>> = t
+        .column_widths
+        .iter()
+        .enumerate()
+        .map(|(i, w)| wrap(row.get(i).map(String::as_str).unwrap_or(""), font, size, w - 2.0 * CELL_PAD))
+        .collect();
+    let lines = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    (cells, lines as f32 * size * LEADING + 2.0 * CELL_PAD)
 }
 
 struct PageBuf {
@@ -337,52 +358,34 @@ impl<'a> Layout<'a> {
             return Err(Error::BadTable("row has more cells than columns".into()));
         }
         let size = t.font_size;
-        let lh = size * LEADING;
         let max_row_h = PAGE_H - 2.0 * MARGIN;
 
-        let mut all: Vec<(&Vec<String>, bool)> = Vec::new();
-        for r in &t.rows {
-            all.push((r, false));
+        let header = t.header.as_ref().map(|h| layout_row(h, true, t));
+        let header_h = header.as_ref().map_or(0.0, |(_, h)| *h);
+        if header_h > max_row_h {
+            return Err(Error::RowTooTall);
         }
-        for (row, is_header) in t.header.iter().map(|h| (h, true)).chain(all.iter().copied()) {
-            let font = if is_header { Font::HelveticaBold } else { Font::Helvetica };
-            let cells: Vec<Vec<String>> = (0..ncols)
-                .map(|i| {
-                    let s = row.get(i).map(String::as_str).unwrap_or("");
-                    wrap(s, font, size, t.column_widths[i] - 2.0 * CELL_PAD)
-                })
-                .collect();
-            let lines = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
-            let h = lines as f32 * lh + 2.0 * CELL_PAD;
-            if h > max_row_h {
+        let rows = t.rows.iter().map(|r| layout_row(r, false, t));
+        if let Some((cells, h)) = &header {
+            if self.y - h < MARGIN && !self.at_top() {
+                self.new_page();
+            }
+            self.draw_row(cells, Font::HelveticaBold, size, *h, &t.column_widths, true);
+        }
+        for (cells, h) in rows {
+            // A row that cannot fit under the header repeated on a fresh page can never be placed.
+            if header_h + h > max_row_h {
                 return Err(Error::RowTooTall);
             }
             if self.y - h < MARGIN && !self.at_top() {
                 self.new_page();
-                if !is_header {
-                    if let Some(hdr) = &t.header {
-                        self.table_row(hdr, true, t, size)?;
-                    }
+                if let Some((hc, hh)) = &header {
+                    self.draw_row(hc, Font::HelveticaBold, size, *hh, &t.column_widths, true);
                 }
             }
-            self.draw_row(&cells, font, size, h, &t.column_widths, is_header);
+            self.draw_row(&cells, Font::Helvetica, size, h, &t.column_widths, false);
         }
         self.y -= size * 0.6;
-        Ok(())
-    }
-
-    fn table_row(&mut self, row: &[String], is_header: bool, t: &Table, size: f32) -> Result<(), Error> {
-        let font = if is_header { Font::HelveticaBold } else { Font::Helvetica };
-        let lh = size * LEADING;
-        let cells: Vec<Vec<String>> = (0..t.column_widths.len())
-            .map(|i| {
-                let s = row.get(i).map(String::as_str).unwrap_or("");
-                wrap(s, font, size, t.column_widths[i] - 2.0 * CELL_PAD)
-            })
-            .collect();
-        let lines = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
-        let h = lines as f32 * lh + 2.0 * CELL_PAD;
-        self.draw_row(&cells, font, size, h, &t.column_widths, is_header);
         Ok(())
     }
 
@@ -517,7 +520,7 @@ fn wrap(text: &str, font: Font, size: f32, max_w: f32) -> Vec<String> {
     let mut out = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
-        for word in para.split_whitespace() {
+        for word in para.split(|c: char| c.is_whitespace() && c != '\u{a0}').filter(|w| !w.is_empty()) {
             let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
             if font.text_width(&cand, size) <= max_w {
                 line = cand;

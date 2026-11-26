@@ -74,6 +74,22 @@ fn text_is_wrapped_and_present() {
 }
 
 #[test]
+fn nbsp_is_kept_inside_the_word() {
+    let mut d = Document::new();
+    d.add_text("a\u{a0}b", Font::Helvetica, 12.0);
+    // 100 x "ab" joined by NBSP is far wider than a line: it must be hard-broken by characters, not at NBSP.
+    let long = vec!["ab"; 100].join("\u{a0}");
+    d.add_text(&long, Font::Courier, 12.0);
+    let q = qdf(&write_and_check("nbsp.pdf", &d));
+    // qpdf --qdf re-serialises the strings as hex: `(a\240b)` becomes `<61a062>`.
+    assert!(contains(&q, "<61a062> Tj"), "NBSP must be written as byte 0xA0 (\\240)");
+    assert!(!contains(&q, "<612062>"), "NBSP turned into a space");
+    // Courier 12pt: 0.6 * 12 = 7.2pt per char, 495pt line -> 68 chars per line, not 2 ("ab").
+    assert!(!contains(&q, "<6162> Tj"), "phrase broke at NBSP");
+    assert!(contains(&q, "<6162a06162a0"), "long phrase lines keep NBSP between words");
+}
+
+#[test]
 fn all_four_fonts_are_declared_and_used() {
     let mut d = Document::new();
     d.add_text("sans", Font::Helvetica, 12.0)
@@ -148,6 +164,46 @@ fn table_splits_across_pages_and_repeats_header() {
     let q = String::from_utf8_lossy(&qdf(&p)).to_string();
     assert_eq!(q.matches("(Description) Tj").count(), pages, "header repeats on every page");
     assert!(q.contains("(R119) Tj"));
+}
+
+#[test]
+fn row_taller_than_page_under_header_is_rejected() {
+    // Header (6 wrapped lines) plus a 60-line row exceed the text area; old code drew the row below the
+    // bottom margin after repeating the header on a fresh page.
+    let mut d = Document::new();
+    d.add_text("x", Font::Helvetica, 10.0);
+    d.add_table(Table {
+        column_widths: vec![30.0],
+        header: Some(vec!["h1 h2 h3 h4 h5 h6".into()]),
+        rows: vec![vec!["x".into()], vec![vec!["y"; 60].join("\n")]],
+        font_size: 10.0,
+    });
+    assert_eq!(d.render().unwrap_err(), Error::RowTooTall);
+}
+
+#[test]
+fn header_and_row_filling_the_page_stay_inside_margins() {
+    // One-line header (20pt) + 59-line row (716pt) = 736pt <= 742pt text area.
+    let table = Table {
+        column_widths: vec![60.0],
+        header: Some(vec!["H".into()]),
+        rows: vec![vec!["x".into()], vec![vec!["y"; 59].join("\n")]],
+        font_size: 10.0,
+    };
+    let mut d = Document::new();
+    d.add_text("x", Font::Helvetica, 10.0);
+    d.add_table(table.clone());
+    d.add_table(table); // second copy: header on a partly filled page must move with its row
+    let p = write_and_check("table_header_fill.pdf", &d);
+    let q = String::from_utf8_lossy(&qdf(&p)).to_string();
+    let mut rects = 0;
+    for line in q.lines().filter(|l| l.ends_with(" re S")) {
+        let nums: Vec<f32> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let (y, h) = (nums[nums.len() - 3], nums[nums.len() - 1]);
+        assert!(y >= 50.0 - 0.01 && y + h <= 842.0 - 50.0 + 0.01, "rect outside margins: {line}");
+        rects += 1;
+    }
+    assert!(rects >= 8, "expected header and row rects, got {rects}");
 }
 
 #[test]
@@ -292,6 +348,10 @@ fn jpeg_header_parsing_and_rejection() {
     assert_eq!((rgb.width(), rgb.height()), (300, 200));
     assert!(matches!(Image::jpeg(jpeg_header(10, 10, 4)), Err(Error::BadJpeg(_))));
     assert!(matches!(Image::jpeg(jpeg_header(0, 10, 3)), Err(Error::BadJpeg(_))));
+    // SOF1 with 12-bit samples: /BitsPerComponent 8 would misdescribe it.
+    let mut j12 = vec![0xFF, 0xD8, 0xFF, 0xC1, 0x00, 0x0B, 12, 0x00, 0x10, 0x00, 0x10, 0x01, 0x01, 0x11, 0x00];
+    j12.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0xFF, 0xD9]);
+    assert!(matches!(Image::jpeg(j12), Err(Error::BadJpeg(m)) if m.contains("12")));
 }
 
 #[test]
