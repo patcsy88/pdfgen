@@ -28,7 +28,7 @@ jobs:
       - name: Install qpdf
         run: sudo apt-get update && sudo apt-get install -y qpdf
       - run: cargo test --workspace --locked
-      - name: Every wrapper declares the same C ABI as ffi/src/lib.rs
+      - name: The C header and every wrapper declare the same C ABI as ffi/src/lib.rs
         run: python3 tools/abi-check.py
       - uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4
         with:

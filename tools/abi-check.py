@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Checks that every wrapper declares the same C ABI as ffi/src/lib.rs.
+"""Checks that the C header and every wrapper declare the same C ABI as ffi/src/lib.rs.
 
-Run from anywhere: `python3 tools/abi-check.py [--root DIR]`. Exits 0 when all six declaration sites
-(Rust, C#, Node, Python, Java, Go) agree, 1 on any difference, 2 if a declaration cannot be parsed.
+Run from anywhere: `python3 tools/abi-check.py [--root DIR]`. Exits 0 when all seven declaration sites
+(Rust, the C header, C#, Node, Python, Java, Go) agree, 1 on any difference, 2 if a declaration cannot
+be parsed.
 
 What is compared, per exported function: the name, the argument count, and each argument and the return
 value reduced to a width class: ptr, i32 (any 32-bit integer), i64 (any 64-bit integer, i.e. usize), f32,
 void. Signedness and pointee types are NOT compared: Java has no unsigned types and several wrappers
-pass every pointer as an untyped one. Error-code and font constants are not compared either.
+pass every pointer as an untyped one.
+
+Constants are compared for the C header only: PDFGEN_OK and every PDFGEN_ERR_* against the `pub const`
+values in ffi/src/lib.rs, and every PDFGEN_FONT_* against the position of that font in `Font::ALL` in
+core/src/lib.rs. The wrappers' own copies of these constants are NOT checked.
 
 Standard library only.
 """
@@ -179,7 +184,61 @@ def java(root):
     return fns
 
 
-SITES = [("c#", csharp), ("node", node), ("python", python), ("java", java), ("go", go)]
+# --- C header (ffi/include/pdfgen.h) ---------------------------------------------------------------------
+def header_text(root):
+    """The header with block comments removed."""
+    src = (root / "ffi/include/pdfgen.h").read_text()
+    return re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+
+
+def header(root):
+    src = header_text(root)
+    src = re.sub(r"^[ \t]*#.*$", "", src, flags=re.M)
+    src = re.sub(r'extern\s+"C"\s*\{', "", src).replace("}", "")
+    fns = {}
+    for m in re.finditer(r"([^;]*?\bpdfgen_\w+\s*\([^;]*?\))\s*;", src):
+        name, sig = parse_c_decl(m.group(1), "header")
+        if name in fns:
+            raise ParseError(f"header: {name} declared twice")
+        fns[name] = sig
+    return fns
+
+
+def expected_constants(root):
+    """PDFGEN_* values the header must define, from ffi/src/lib.rs and Font::ALL in core/src/lib.rs."""
+    rust_src = (root / "ffi/src/lib.rs").read_text()
+    consts = {n: int(v) for n, v in re.findall(r"pub const PDFGEN_(\w+):\s*i32\s*=\s*(-?\d+)\s*;", rust_src)}
+    if "OK" not in consts:
+        raise ParseError("rust: no PDFGEN_* constants found")
+    core_src = (root / "core/src/lib.rs").read_text()
+    m = re.search(r"pub const ALL:\s*\[Font;\s*\d+\]\s*=\s*\[(.*?)\]", core_src, re.S)
+    if not m:
+        raise ParseError("core: cannot find Font::ALL")
+    for i, variant in enumerate(re.findall(r"Font::(\w+)", m.group(1))):
+        consts["FONT_" + re.sub(r"(?<!^)(?=[A-Z])", "_", variant).upper()] = i
+    return consts
+
+
+def header_constants(root):
+    src = header_text(root)
+    pat = r"^[ \t]*#[ \t]*define[ \t]+PDFGEN_(\w+)[ \t]+\(?[ \t]*(-?\d+)[ \t]*\)?[ \t]*$"
+    return {n: int(v) for n, v in re.findall(pat, src, re.M)}
+
+
+def constant_problems(root):
+    want, have = expected_constants(root), header_constants(root)
+    out = []
+    for n in sorted(want.keys() - have.keys()):
+        out.append(f"header: missing #define PDFGEN_{n} (expected {want[n]})")
+    for n in sorted(have.keys() - want.keys()):
+        out.append(f"header: defines PDFGEN_{n}, which is neither a ffi/src/lib.rs constant nor a Font::ALL entry")
+    for n in sorted(want.keys() & have.keys()):
+        if want[n] != have[n]:
+            out.append(f"header: PDFGEN_{n} is {have[n]}, expected {want[n]}")
+    return out, len(want)
+
+
+SITES = [("header", header), ("c#", csharp), ("node", node), ("python", python), ("java", java), ("go", go)]
 
 
 def main(argv):
@@ -189,6 +248,7 @@ def main(argv):
     try:
         truth = rust(root)
         found = {label: fn(root) for label, fn in SITES}
+        const_problems, nconst = constant_problems(root)
     except (ParseError, OSError, StopIteration) as e:
         print(f"abi-check: cannot parse: {e}", file=sys.stderr)
         return 2
@@ -196,7 +256,7 @@ def main(argv):
         print("abi-check: found no exported functions in ffi/src/lib.rs", file=sys.stderr)
         return 2
 
-    problems = []
+    problems = list(const_problems)
     for label, fns in found.items():
         for name in sorted(truth.keys() - fns.keys()):
             problems.append(f"{label}: missing {name}")
@@ -210,7 +270,8 @@ def main(argv):
         print("abi-check: FAILED")
         print("\n".join("  " + p for p in problems))
         return 1
-    print(f"abi-check: ok  {len(truth)} functions agree across rust + {', '.join(found)}")
+    print(f"abi-check: ok  {len(truth)} functions agree across rust + {', '.join(found)}; "
+          f"{nconst} header constants match")
     return 0
 
 

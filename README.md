@@ -22,7 +22,7 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
 | Tool | Needed for | Tested with |
 |---|---|---|
 | Rust (rustc + cargo) | everything | 1.100.0 |
-| C linker (`cc`) | linking Rust binaries | gcc 12.2 |
+| C and C++ compiler (`cc`, `c++`) | linking Rust binaries; the header test in `ffi/tests/c_header.rs` compiles C99 and C++17 | gcc and g++ 12.2 |
 | `qpdf` | the tests call `qpdf --check` on every PDF they produce | 11.3.0 |
 | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) | license check | 0.22.1 |
 | .NET SDK 10 | the wrapper and its tests | 10.0.404 |
@@ -329,16 +329,29 @@ under Build and test.
 
 ## C ABI
 
-Library name `pdfgen_ffi`. There is no generated header; the functions are
-declared in `ffi/src/lib.rs` and, as P/Invoke, in `dotnet/PdfGen/Native.cs`, for
-koffi in `node/src/native.js`, for ctypes in `python/pdfgen/_native.py`, for the Java
-foreign function API in `java/src/main/java/io/github/patcsy88/pdfgen/Native.java`,
-and for cgo in the comment above `import "C"` in `go/pdfgen.go`.
+Library name `pdfgen_ffi`. C and C++ programs include `ffi/include/pdfgen.h`, which is
+written by hand: it declares every exported function, the `PDFGEN_ERR_*` codes and the
+`PDFGEN_FONT_*` codes, and documents ownership and error behavior. Link with
+`-L target/release -lpdfgen_ffi`. The header has been compiled as C99 and C++17 with
+`-Wall -Wextra -Wpedantic -Werror` by gcc 12.2 only; it has not been built on Windows
+or macOS, or with clang or MSVC.
+
+`ffi/tests/c_header.rs` compiles `ffi/tests/c/smoke.c` against the header as C99 and as
+C++17, links it to the library cargo just built, runs it, and checks the PDF it writes
+with `qpdf --check`. It runs under `cargo test --workspace`.
+
+The functions are also declared in `ffi/src/lib.rs` and, as P/Invoke, in
+`dotnet/PdfGen/Native.cs`, for koffi in `node/src/native.js`, for ctypes in
+`python/pdfgen/_native.py`, for the Java foreign function API in
+`java/src/main/java/io/github/patcsy88/pdfgen/Native.java`, and for cgo in the comment
+above `import "C"` in `go/pdfgen.go`.
 
 `tools/abi-check.py` compares the name, argument count and argument widths (pointer,
-32-bit, 64-bit, float) of every function across the Rust source and the five wrapper
-declarations, and exits 1 on any difference. It does not compare signedness, pointee
-types or the error-code and font constants.
+32-bit, 64-bit, float) of every function across the Rust source, the header and the
+five wrapper declarations, and exits 1 on any difference. For the header only, it also
+compares the `PDFGEN_*` values with the constants in `ffi/src/lib.rs` and the order of
+`Font::ALL`. It does not compare signedness or pointee types, and it does not check the
+constants that each wrapper declares for itself.
 
 - Handles are opaque pointers. Free each with its matching `*_free`; passing NULL
   to a `*_free` function is a no-op.
