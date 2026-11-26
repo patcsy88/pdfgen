@@ -85,6 +85,7 @@ cd java && python3 license-check.py                  # every Maven package, test
 cd go && go test ./...                               # writes go/test-output/*.pdf
 cd .. && PDFGEN_CHECK_DIR=go/test-output cargo test -p pdfgen-core --test external_pdfs
 cd go && ./license-check.sh                          # fails if any third-party module appears
+python3 tools/abi-check.py                           # every wrapper declares the same C ABI as ffi/src/lib.rs
 ```
 
 The .NET build fails with a clear message if that library is missing. NuGet
@@ -102,6 +103,17 @@ fail with "no default toolchain" if it moves.
 
 Test PDFs are left in `target/tmp/` (Rust) and next to the test assembly
 (`dotnet/PdfGen.Tests/bin/`), so you can open them.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests: one job each
+for Rust (tests, `tools/abi-check.py`, `cargo deny check licenses`), .NET, Node.js,
+Python (3.10 and 3.13), Java and Go (1.24 and stable). Each wrapper job builds the
+release library, runs the wrapper's tests and, except .NET, the `external_pdfs` checks.
+Every action is pinned to a commit SHA. The workflow passes `actionlint` and the same
+commands pass locally, but it has not yet run on GitHub: the first run may show
+failures that local runs cannot, such as the Temurin JDK 25 build, Node 24 and
+Python 3.10, none of which were tested locally.
 
 ## Use from Rust
 
@@ -322,6 +334,11 @@ declared in `ffi/src/lib.rs` and, as P/Invoke, in `dotnet/PdfGen/Native.cs`, for
 koffi in `node/src/native.js`, for ctypes in `python/pdfgen/_native.py`, for the Java
 foreign function API in `java/src/main/java/io/github/patcsy88/pdfgen/Native.java`,
 and for cgo in the comment above `import "C"` in `go/pdfgen.go`.
+
+`tools/abi-check.py` compares the name, argument count and argument widths (pointer,
+32-bit, 64-bit, float) of every function across the Rust source and the five wrapper
+declarations, and exits 1 on any difference. It does not compare signedness, pointee
+types or the error-code and font constants.
 
 - Handles are opaque pointers. Free each with its matching `*_free`; passing NULL
   to a `*_free` function is a no-op.

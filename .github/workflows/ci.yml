@@ -1,0 +1,135 @@
+name: CI
+
+# Mirrors the commands in README.md "Build and test". Every action is pinned to a commit SHA; the tag it
+# was resolved from is in the trailing comment.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust tests, ABI drift, licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install qpdf
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - run: cargo test --workspace --locked
+      - name: Every wrapper declares the same C ABI as ffi/src/lib.rs
+        run: python3 tools/abi-check.py
+      - uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4
+        with:
+          command: check licenses
+
+  dotnet:
+    name: .NET wrapper
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Install qpdf
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - run: cargo build --release -p ffi --locked
+      - run: dotnet test dotnet/
+
+  node:
+    name: Node.js wrapper
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install qpdf
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - run: cargo build --release -p ffi --locked
+      - run: npm ci && npm test
+        working-directory: node
+      - run: PDFGEN_CHECK_DIR=node/test-output cargo test -p pdfgen-core --test external_pdfs --locked
+      - run: npm run license-check && npm run license-check:all
+        working-directory: node
+
+  python:
+    name: Python wrapper (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the declared floor (requires-python); 3.13 is a recent release.
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install qpdf
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - run: cargo build --release -p ffi --locked
+      - run: python -W error -m unittest discover -s tests
+        working-directory: python
+      - run: PDFGEN_CHECK_DIR=python/test-output cargo test -p pdfgen-core --test external_pdfs --locked
+
+  java:
+    name: Java wrapper
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          # pom.xml sets maven.compiler.release to 25, so older JDKs cannot compile it.
+          java-version: "25"
+      - name: Install qpdf
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - run: cargo build --release -p ffi --locked
+      - run: mvn -B test
+        working-directory: java
+      - run: PDFGEN_CHECK_DIR=java/test-output cargo test -p pdfgen-core --test external_pdfs --locked
+      - run: python3 license-check.py
+        working-directory: java
+
+  go:
+    name: Go wrapper (${{ matrix.go }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.24 is the floor declared in go/go.mod.
+        go: ["1.24", "stable"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - name: Install qpdf
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - run: cargo build --release -p ffi --locked
+      - name: gofmt and vet
+        run: test -z "$(gofmt -l .)" && go vet ./...
+        working-directory: go
+      - run: go test -race -count=1 ./...
+        working-directory: go
+      - run: PDFGEN_CHECK_DIR=go/test-output cargo test -p pdfgen-core --test external_pdfs --locked
+      - run: ./license-check.sh
+        working-directory: go
