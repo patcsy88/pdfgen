@@ -10,3 +10,4 @@ __pycache__/
 python/*.egg-info/
 java/target/
 java/test-output/
+go/test-output/
