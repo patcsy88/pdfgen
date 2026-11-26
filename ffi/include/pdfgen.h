@@ -59,7 +59,8 @@ PdfgenDoc *pdfgen_doc_new(void);
 void pdfgen_doc_free(PdfgenDoc *doc);
 
 /* Adds wrapped text. font is a PDFGEN_FONT_* code; size is in points and must be finite and > 0.
- * A size above 1000 is accepted here but makes pdfgen_doc_render() fail with PDFGEN_ERR_CORE.
+ * A size above (842 - 2 * 50) / 1.2 = 618.33 (one line as tall as the page's text area) is accepted here
+ * but makes pdfgen_doc_render() fail with PDFGEN_ERR_CORE.
  * Errors: NULL doc or text (PDFGEN_ERR_NULL), invalid UTF-8 (PDFGEN_ERR_UTF8), bad font or size
  * (PDFGEN_ERR_ARG). */
 int32_t pdfgen_doc_add_text(PdfgenDoc *doc, const char *text, int32_t font, float size);
@@ -99,9 +100,10 @@ int32_t pdfgen_doc_add_table(PdfgenDoc *doc, const PdfgenTable *t);
 
 /* Renders the document to PDF bytes. On success *out_data points to *out_len bytes, to be released with
  * pdfgen_buffer_free(*out_data, *out_len). On failure *out_data is NULL and *out_len is 0. Besides the
- * row-width case above, it fails with PDFGEN_ERR_CORE when a text or table font size is above 1000, a
- * column width is above 32767, the column widths add up to more than 32717, or a table row (together
- * with the header) is taller than a page. The document is not consumed: it can be changed and rendered again. */
+ * row-width case above, it fails with PDFGEN_ERR_CORE when a text size is above 618.33, a table font
+ * size is above 1000, a column width is at most 8 or above 32767, the column widths add up to more than
+ * 32717, or a table row (together with the header) is taller than a page. The document is not consumed:
+ * it can be changed and rendered again. */
 int32_t pdfgen_doc_render(const PdfgenDoc *doc, uint8_t **out_data, size_t *out_len);
 
 /* Frees a buffer from pdfgen_doc_render(). data and len must be exactly what that call returned; free

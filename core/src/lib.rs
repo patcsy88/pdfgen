@@ -19,6 +19,9 @@ const LEADING: f32 = 1.2;
 /// Largest font size `render` accepts. A line is `size * LEADING` tall, so this keeps every coordinate
 /// written to a content stream well inside the +-32767 limit that PDF consumers implement (ISO 32000-2 Annex C).
 const MAX_FONT_SIZE: f32 = 1000.0;
+/// Largest text size `render` accepts: one line (`size * LEADING`) exactly fills the text area of a page.
+/// Table font sizes keep [`MAX_FONT_SIZE`]; a row too tall for a page fails with [`Error::RowTooTall`].
+const MAX_TEXT_SIZE: f32 = (PAGE_H - 2.0 * MARGIN) / LEADING;
 /// Largest x coordinate `render` lets a table reach.
 const MAX_COORD: f32 = 32767.0;
 
@@ -32,7 +35,8 @@ pub enum Error {
     BadTable(String),
     /// A table row is taller than a full page, or taller than a page together with the table header.
     RowTooTall,
-    /// A font size, column width or image width is NaN, infinite, not positive, or above its limit.
+    /// A font size, column width or image width is NaN, infinite, not positive, or above its limit, or a
+    /// column width leaves no room inside its cell padding.
     BadDimension(String),
 }
 
@@ -261,8 +265,9 @@ impl Document {
 
     /// Lay out all blocks and serialise a PDF 2.0 file.
     ///
-    /// Fails with [`Error::BadDimension`] before any layout if a text size or table font size is not in
-    /// `(0, 1000]`, a column width is not positive and finite, the columns together reach beyond x = 32767,
+    /// Fails with [`Error::BadDimension`] before any layout if a text size is not in `(0, 618.33]` (one line
+    /// as tall as the page's text area), a table font size is not in `(0, 1000]`, a column width is not
+    /// finite and above 8 (twice the cell padding), the columns together reach beyond x = 32767,
     /// or an image width is not positive and finite. An image wider than the text area is scaled down.
     ///
     /// Fails with [`Error::RowTooTall`] if a table row, together with the table's header if it has one,
@@ -270,7 +275,7 @@ impl Document {
     pub fn render(&self) -> Result<Vec<u8>, Error> {
         for b in &self.blocks {
             match b {
-                Block::Text { size, .. } => check_dim("text size", *size, MAX_FONT_SIZE)?,
+                Block::Text { size, .. } => check_dim("text size", *size, MAX_TEXT_SIZE)?,
                 Block::Table(t) => check_table_dims(t)?,
                 Block::Image { width, .. } => check_dim("image width", *width, f32::MAX)?,
                 Block::PageBreak => {}
@@ -301,6 +306,9 @@ fn check_table_dims(t: &Table) -> Result<(), Error> {
     check_dim("table font size", t.font_size, MAX_FONT_SIZE)?;
     for w in &t.column_widths {
         check_dim("column width", *w, MAX_COORD)?;
+        if *w <= 2.0 * CELL_PAD {
+            return Err(Error::BadDimension(format!("column width must be above {}, got {w}", 2.0 * CELL_PAD)));
+        }
     }
     let total: f32 = t.column_widths.iter().sum();
     if !(total <= MAX_COORD - MARGIN) {

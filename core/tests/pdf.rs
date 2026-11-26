@@ -241,13 +241,15 @@ fn non_finite_or_out_of_range_dimensions_are_rejected_not_written() {
         d.add_text("x", Font::Helvetica, size);
         d.render()
     };
-    for size in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.0, -1.0, 1000.5, 1e30, f32::MAX] {
+    let max_text = (842.0 - 2.0 * 50.0) / 1.2; // (PAGE_H - 2 * MARGIN) / LEADING: one line fills the text area
+    for size in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.0, -1.0, 618.4, 1000.0, 1e30, f32::MAX] {
         assert!(matches!(bad_text(size), Err(Error::BadDimension(_))), "text size {size}");
     }
     for (widths, size) in [
         (vec![50.0, f32::NAN], 10.0),
         (vec![f32::INFINITY], 10.0),
         (vec![0.0], 10.0),
+        (vec![8.0], 10.0),
         (vec![-100.0], 10.0),
         (vec![20000.0, 20000.0], 10.0),
         (vec![50.0], f32::NAN),
@@ -265,10 +267,36 @@ fn non_finite_or_out_of_range_dimensions_are_rejected_not_written() {
 
     // The limits themselves are accepted and still conformant.
     let mut d = Document::new();
-    d.add_text("big", Font::Helvetica, 1000.0).add_text("tiny", Font::Courier, 1e-3);
+    d.add_text("big", Font::Helvetica, max_text).add_text("tiny", Font::Courier, 1e-3);
     d.add_table(table(vec![32000.0], 1.0));
+    d.add_table(table(vec![8.5], 1.0));
     d.add_image(Image::gray(2, 2, vec![0, 1, 2, 3]).unwrap(), 1e30);
     write_and_check("dimension_limits.pdf", &d);
+}
+
+#[test]
+fn text_at_max_size_stays_on_the_page() {
+    // A size whose line (size * 1.2) is taller than the text area used to be drawn below the page bottom.
+    let max_text = (842.0f32 - 2.0 * 50.0) / 1.2;
+    let mut d = Document::new();
+    d.add_text("x", Font::Helvetica, max_text.next_up());
+    assert!(matches!(d.render(), Err(Error::BadDimension(m)) if m.contains("text size")));
+    let mut d = Document::new();
+    d.add_text("A B", Font::Helvetica, max_text);
+    let p = write_and_check("max_text_size.pdf", &d);
+    let q = String::from_utf8_lossy(&qdf(&p)).into_owned();
+    let ys: Vec<f32> = q
+        .lines()
+        .filter(|l| l.ends_with(" Td (A) Tj ET") || l.ends_with(" Td (B) Tj ET"))
+        .map(|l| l.split_whitespace().nth(5).unwrap().parse().unwrap())
+        .collect();
+    assert_eq!(ys.len(), 2, "one word per line: {q}");
+    for y in ys {
+        // Helvetica's descender is 207/1000 em: the lowest glyph ink must stay above the bottom margin's
+        // edge, i.e. on the page.
+        assert!(y - 0.207 * max_text >= 0.0, "baseline {y} puts descender below page");
+        assert!(y >= 50.0 - 0.01, "baseline {y} below the bottom margin");
+    }
 }
 
 fn gradient(w: u32, h: u32) -> Vec<u8> {
