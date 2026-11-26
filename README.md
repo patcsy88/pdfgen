@@ -439,6 +439,37 @@ layers, all inside `cargo test`, plus an optional fourth:
 Both checkers have tests of their own: valid files that must pass and seeded
 violations that must be reported.
 
+### Randomised input tests
+
+`core/tests/fuzz.rs` is part of `cargo test`. It is a seeded generator, not a
+coverage-guided fuzzer: it builds random documents (text with parentheses,
+backslashes, control characters and non-Latin-1 characters; tables with zero
+columns, too many cells and very narrow columns; raw and JPEG images; page breaks;
+and NaN, infinite, zero, negative and huge sizes and widths) and 10 times as many
+mutated JPEG headers. For every input `render` must not panic, must return `Ok` or
+one of the documented errors, and every file it returns must pass layers 2 and 3
+above. One document in 20 also goes through `qpdf --check`, except documents that
+hold a header-only JPEG, which qpdf cannot decode.
+
+The defaults (seed 1, 300 documents, 3000 JPEG mutations) take about 12 s in a debug
+build. A failure prints the seed and iteration. For a longer run:
+
+```bash
+PDFGEN_FUZZ_SEED=7 PDFGEN_FUZZ_ITERS=3000 cargo test -p pdfgen-core --release --test fuzz
+```
+
+Its first run found that `render` wrote `NaN`, `inf`, 1e30 coordinates and negative
+scales into content streams when a text size, column width or image width had such a
+value; the content-stream check reported them. `render` now returns
+`Error::BadDimension` instead; the limits are in the `Document::render` doc comment
+and `ffi/include/pdfgen.h`. These checks happen at render time, so
+`pdfgen_doc_add_text` and the wrappers still accept a size such as 5000 and fail
+later, in `render`, with the code for a core error.
+
+What it does not do: it does not explore code paths by coverage, it does not fuzz the
+C ABI (null and dangling pointers, bad lengths) or any wrapper, and no input comes
+from a real-world corpus. It has run only on Linux x86-64 with Rust 1.100.0.
+
 Limits, so "passes" isn't read as "certified":
 
 - **Model subset:** only the 16 Arlington models reachable from objects this

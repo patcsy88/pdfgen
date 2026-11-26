@@ -16,6 +16,11 @@ const PAGE_H: f32 = 842.0;
 const MARGIN: f32 = 50.0;
 const CELL_PAD: f32 = 4.0;
 const LEADING: f32 = 1.2;
+/// Largest font size `render` accepts. A line is `size * LEADING` tall, so this keeps every coordinate
+/// written to a content stream well inside the +-32767 limit that PDF consumers implement (ISO 32000-2 Annex C).
+const MAX_FONT_SIZE: f32 = 1000.0;
+/// Largest x coordinate `render` lets a table reach.
+const MAX_COORD: f32 = 32767.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -27,6 +32,8 @@ pub enum Error {
     BadTable(String),
     /// A table row is taller than a full page, or taller than a page together with the table header.
     RowTooTall,
+    /// A font size, column width or image width is NaN, infinite, not positive, or above its limit.
+    BadDimension(String),
 }
 
 impl fmt::Display for Error {
@@ -36,6 +43,7 @@ impl fmt::Display for Error {
             Error::BadJpeg(m) => write!(f, "bad jpeg: {m}"),
             Error::BadTable(m) => write!(f, "bad table: {m}"),
             Error::RowTooTall => write!(f, "table row taller than a page (together with the header)"),
+            Error::BadDimension(m) => write!(f, "bad dimension: {m}"),
         }
     }
 }
@@ -251,11 +259,23 @@ impl Document {
         self.add(Block::PageBreak)
     }
 
-    /// Lay out all blocks and serialise a PDF 1.4 file.
+    /// Lay out all blocks and serialise a PDF 2.0 file.
+    ///
+    /// Fails with [`Error::BadDimension`] before any layout if a text size or table font size is not in
+    /// `(0, 1000]`, a column width is not positive and finite, the columns together reach beyond x = 32767,
+    /// or an image width is not positive and finite. An image wider than the text area is scaled down.
     ///
     /// Fails with [`Error::RowTooTall`] if a table row, together with the table's header if it has one,
     /// is taller than a page.
     pub fn render(&self) -> Result<Vec<u8>, Error> {
+        for b in &self.blocks {
+            match b {
+                Block::Text { size, .. } => check_dim("text size", *size, MAX_FONT_SIZE)?,
+                Block::Table(t) => check_table_dims(t)?,
+                Block::Image { width, .. } => check_dim("image width", *width, f32::MAX)?,
+                Block::PageBreak => {}
+            }
+        }
         let mut lay = Layout::new();
         for b in &self.blocks {
             match b {
@@ -267,6 +287,26 @@ impl Document {
         }
         Ok(lay.finish())
     }
+}
+
+fn check_dim(what: &str, v: f32, max: f32) -> Result<(), Error> {
+    if v.is_finite() && v > 0.0 && v <= max {
+        Ok(())
+    } else {
+        Err(Error::BadDimension(format!("{what} must be greater than 0 and at most {max}, got {v}")))
+    }
+}
+
+fn check_table_dims(t: &Table) -> Result<(), Error> {
+    check_dim("table font size", t.font_size, MAX_FONT_SIZE)?;
+    for w in &t.column_widths {
+        check_dim("column width", *w, MAX_COORD)?;
+    }
+    let total: f32 = t.column_widths.iter().sum();
+    if !(total <= MAX_COORD - MARGIN) {
+        return Err(Error::BadDimension(format!("column widths add up to {total}, more than {}", MAX_COORD - MARGIN)));
+    }
+    Ok(())
 }
 
 /// Wraps each cell of `row` into its column and returns the lines plus the row height.

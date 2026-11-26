@@ -103,6 +103,14 @@ fn errors_are_codes_with_messages_not_panics() {
         assert!(d.is_null() && l == 0);
         assert!(last_error().contains("more cells than columns"), "{}", last_error());
 
+        // Sizes the core rejects at render time are accepted while building: the FFI only checks finite and > 0.
+        let big = pdfgen_doc_new();
+        assert_eq!(pdfgen_doc_add_text(big, cs("x").as_ptr(), 0, 5000.0), PDFGEN_OK);
+        assert_eq!(pdfgen_doc_render(big, &mut d, &mut l), PDFGEN_ERR_CORE);
+        assert!(d.is_null() && l == 0);
+        assert!(last_error().contains("text size"), "{}", last_error());
+        pdfgen_doc_free(big);
+
         assert!(pdfgen_table_new(ptr::null(), 0, 10.0).is_null());
         assert!(pdfgen_table_new(w.as_ptr(), 1, -1.0).is_null());
         // Failure clears whichever out-params are non-NULL, even on early NULL checks.

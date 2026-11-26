@@ -231,6 +231,46 @@ fn table_errors() {
     assert_eq!(d.render().unwrap_err(), Error::RowTooTall);
 }
 
+#[test]
+fn non_finite_or_out_of_range_dimensions_are_rejected_not_written() {
+    // Each of these used to render a PDF whose content stream held `NaN`, `inf`, a 1e30 coordinate or a
+    // negative scale (found by tests/fuzz.rs); qpdf accepted some of them, content-stream rules did not.
+    let table = |widths: Vec<f32>, size: f32| Table { column_widths: widths, header: None, rows: vec![vec!["a".into()]], font_size: size };
+    let bad_text = |size: f32| {
+        let mut d = Document::new();
+        d.add_text("x", Font::Helvetica, size);
+        d.render()
+    };
+    for size in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.0, -1.0, 1000.5, 1e30, f32::MAX] {
+        assert!(matches!(bad_text(size), Err(Error::BadDimension(_))), "text size {size}");
+    }
+    for (widths, size) in [
+        (vec![50.0, f32::NAN], 10.0),
+        (vec![f32::INFINITY], 10.0),
+        (vec![0.0], 10.0),
+        (vec![-100.0], 10.0),
+        (vec![20000.0, 20000.0], 10.0),
+        (vec![50.0], f32::NAN),
+        (vec![50.0], -0.0),
+    ] {
+        let mut d = Document::new();
+        d.add_table(table(widths.clone(), size));
+        assert!(matches!(d.render(), Err(Error::BadDimension(_))), "table {widths:?} size {size}");
+    }
+    for width in [f32::NAN, f32::INFINITY, 0.0, -50.0] {
+        let mut d = Document::new();
+        d.add_image(Image::gray(2, 2, vec![0, 1, 2, 3]).unwrap(), width);
+        assert!(matches!(d.render(), Err(Error::BadDimension(_))), "image width {width}");
+    }
+
+    // The limits themselves are accepted and still conformant.
+    let mut d = Document::new();
+    d.add_text("big", Font::Helvetica, 1000.0).add_text("tiny", Font::Courier, 1e-3);
+    d.add_table(table(vec![32000.0], 1.0));
+    d.add_image(Image::gray(2, 2, vec![0, 1, 2, 3]).unwrap(), 1e30);
+    write_and_check("dimension_limits.pdf", &d);
+}
+
 fn gradient(w: u32, h: u32) -> Vec<u8> {
     let mut v = Vec::new();
     for y in 0..h {

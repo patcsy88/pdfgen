@@ -712,7 +712,8 @@ impl<'a> Walker<'a> {
 
 /// Every Arlington violation found in `bytes`, walking from the trailer.
 pub fn arlington_errors(bytes: &[u8]) -> Vec<String> {
-    let models = load_models();
+    static MODELS: std::sync::LazyLock<HashMap<String, Model>> = std::sync::LazyLock::new(load_models);
+    let models = &*MODELS;
     let doc = match Document::load_mem(bytes) {
         Ok(d) => d,
         Err(e) => return vec![format!("lopdf cannot parse the file: {e}")],
