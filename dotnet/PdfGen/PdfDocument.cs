@@ -141,6 +141,7 @@ public sealed class PdfDocument : IDisposable
     {
         ArgumentNullException.ThrowIfNull(table);
         Interop.Check(Native.pdfgen_doc_add_table(Handle, table.Handle));
+        GC.KeepAlive(table);
         return this;
     }
 
@@ -148,6 +149,7 @@ public sealed class PdfDocument : IDisposable
     public byte[] Render()
     {
         Interop.Check(Native.pdfgen_doc_render(Handle, out var data, out var len));
+        GC.KeepAlive(this);
         try
         {
             var bytes = new byte[checked((int)len)];

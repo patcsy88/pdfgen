@@ -1,10 +1,16 @@
 package pdfgen_test
 
 import (
+	"bytes"
 	"fmt"
 	"math"
+	"runtime"
+	"runtime/debug"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	pdfgen "github.com/patcsy88/pdfgen/go"
 )
@@ -160,6 +166,77 @@ func TestTableIsCopiedSoClosingItAfterwardsIsSafe(t *testing.T) {
 	pdf, err := d.Render()
 	must(t, err)
 	checked(t, "table_closed.pdf", pdf)
+}
+
+// Unclosed handles are only reachable through their wrappers; a collection mid-call must not free them.
+func TestUnclosedHandlesSurviveGCDuringCalls(t *testing.T) {
+	build := func() ([]byte, error) {
+		tb, err := pdfgen.NewTable([]float32{120, 80}, 10)
+		if err != nil {
+			return nil, err
+		}
+		if err := tb.SetHeader("Item", "Qty"); err != nil {
+			return nil, err
+		}
+		if err := tb.AddRow("Widget", "4"); err != nil {
+			return nil, err
+		}
+		d, err := pdfgen.NewDocument()
+		if err != nil {
+			return nil, err
+		}
+		if err := d.AddText(strings.Repeat("gc pressure ", 40), pdfgen.Helvetica, 11); err != nil {
+			return nil, err
+		}
+		if err := d.AddRawImage(4, 4, 1, make([]byte, 16), 20); err != nil {
+			return nil, err
+		}
+		if err := d.AddTable(tb); err != nil {
+			return nil, err
+		}
+		if err := d.AddPageBreak(); err != nil {
+			return nil, err
+		}
+		return d.Render()
+	}
+	want, err := build()
+	must(t, err)
+	defer debug.SetGCPercent(debug.SetGCPercent(1))
+	deadline := time.Now().Add(2 * time.Second)
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for !stop.Load() {
+			runtime.GC()
+		}
+	}()
+	errs := make(chan error, 4)
+	var workers sync.WaitGroup
+	for range 4 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for time.Now().Before(deadline) {
+				got, err := build()
+				if err == nil && !bytes.Equal(got, want) {
+					err = fmt.Errorf("render differs from reference (%d vs %d bytes)", len(got), len(want))
+				}
+				if err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	stop.Store(true)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 }
 
 func TestBadTableArguments(t *testing.T) {

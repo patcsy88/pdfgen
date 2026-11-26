@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.ref.Reference;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -78,7 +79,12 @@ public final class PdfDocument extends NativeHandle {
         if (table == null) {
             throw new NullPointerException("table must not be null");
         }
-        PdfException.check(Native.get().docAddTable(handle(), table.handle()));
+        try {
+            PdfException.check(Native.get().docAddTable(handle(), table.handle()));
+        } finally {
+            // Keep the Cleaner from freeing the table's handle while the native call still reads it.
+            Reference.reachabilityFence(table);
+        }
         return this;
     }
 
@@ -95,6 +101,9 @@ public final class PdfDocument extends NativeHandle {
             } finally {
                 Native.get().bufferFree(data, len);
             }
+        } finally {
+            // Nothing touches `this` after the downcall; without the fence the Cleaner may free the handle mid-render.
+            Reference.reachabilityFence(this);
         }
     }
 

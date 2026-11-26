@@ -159,7 +159,9 @@ func (t *Table) setCells(cells []string, native func(*C.PdfgenTable, **C.char, C
 		return err
 	}
 	defer free()
-	return call(func() C.int32_t { return native(t.handle, arr, C.size_t(len(cells))) })
+	err = call(func() C.int32_t { return native(t.handle, arr, C.size_t(len(cells))) })
+	runtime.KeepAlive(t)
+	return err
 }
 
 // SetHeader sets the header row, repeated on every page the table spans.
@@ -214,9 +216,11 @@ func (d *Document) AddText(text string, font Font, size float32) error {
 		return err
 	}
 	defer C.free(unsafe.Pointer(c))
-	return call(func() C.int32_t {
+	err = call(func() C.int32_t {
 		return C.pdfgen_doc_add_text(d.handle, c, C.int32_t(font), C.float(size))
 	})
+	runtime.KeepAlive(d)
+	return err
 }
 
 // AddPageBreak starts a new page.
@@ -224,7 +228,9 @@ func (d *Document) AddPageBreak() error {
 	if d.handle == nil {
 		return ErrClosed
 	}
-	return call(func() C.int32_t { return C.pdfgen_doc_add_page_break(d.handle) })
+	err := call(func() C.int32_t { return C.pdfgen_doc_add_page_break(d.handle) })
+	runtime.KeepAlive(d)
+	return err
 }
 
 // bytesPtr returns a pointer to the first byte of b, or nil for an empty slice.
@@ -240,10 +246,12 @@ func (d *Document) AddRawImage(width, height, channels uint32, pixels []byte, wi
 	if d.handle == nil {
 		return ErrClosed
 	}
-	return call(func() C.int32_t {
+	err := call(func() C.int32_t {
 		return C.pdfgen_doc_add_image_raw(d.handle, C.uint32_t(width), C.uint32_t(height), C.uint32_t(channels),
 			bytesPtr(pixels), C.size_t(len(pixels)), C.float(widthPt))
 	})
+	runtime.KeepAlive(d)
+	return err
 }
 
 // AddJPEG embeds a JPEG file unchanged, drawn widthPt points wide.
@@ -251,9 +259,11 @@ func (d *Document) AddJPEG(jpeg []byte, widthPt float32) error {
 	if d.handle == nil {
 		return ErrClosed
 	}
-	return call(func() C.int32_t {
+	err := call(func() C.int32_t {
 		return C.pdfgen_doc_add_image_jpeg(d.handle, bytesPtr(jpeg), C.size_t(len(jpeg)), C.float(widthPt))
 	})
+	runtime.KeepAlive(d)
+	return err
 }
 
 // AddTable copies the table into the document; the caller still owns t.
@@ -261,7 +271,10 @@ func (d *Document) AddTable(t *Table) error {
 	if d.handle == nil || t == nil || t.handle == nil {
 		return ErrClosed
 	}
-	return call(func() C.int32_t { return C.pdfgen_doc_add_table(d.handle, t.handle) })
+	err := call(func() C.int32_t { return C.pdfgen_doc_add_table(d.handle, t.handle) })
+	runtime.KeepAlive(d)
+	runtime.KeepAlive(t)
+	return err
 }
 
 // Render lays out the document and returns the PDF bytes.
@@ -271,7 +284,9 @@ func (d *Document) Render() ([]byte, error) {
 	}
 	var data *C.uint8_t
 	var n C.size_t
-	if err := call(func() C.int32_t { return C.pdfgen_doc_render(d.handle, &data, &n) }); err != nil {
+	err := call(func() C.int32_t { return C.pdfgen_doc_render(d.handle, &data, &n) })
+	runtime.KeepAlive(d)
+	if err != nil {
 		return nil, err
 	}
 	defer C.pdfgen_buffer_free(data, n)

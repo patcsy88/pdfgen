@@ -159,4 +159,41 @@ public class PdfTests
         })).ToArray();
         await Task.WhenAll(tasks);
     }
+
+    // Render/AddTable must keep their managed owners alive across the native call;
+    // otherwise the finalizer can free the handle while native code is using it.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static byte[] RenderUnowned(string text) => new PdfDocument().AddText(text).Render();
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static PdfDocument AddUnownedTable(PdfDocument doc, string[] row)
+    {
+        var table = new PdfTable(new[] { 100f, 100f, 100f });
+        for (int i = 0; i < 200; i++) table.AddRow(row);
+        return doc.AddTable(table);
+    }
+
+    [Fact]
+    public async Task UndisposedObjectsSurviveGcDuringNativeCalls()
+    {
+        var text = string.Concat(Enumerable.Repeat("lorem ipsum dolor sit amet ", 4000));
+        var reference = new PdfDocument().AddText(text).Render();
+        var row = new[] { "a", "b", "c" };
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2.5));
+        var gc = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested) { GC.Collect(); GC.WaitForPendingFinalizers(); }
+        });
+        var workers = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                Assert.Equal(reference, RenderUnowned(text));
+                using var doc = new PdfDocument();
+                AddUnownedTable(doc, row);
+            }
+        })).ToArray();
+        await Task.WhenAll(workers);
+        await gc;
+    }
 }
