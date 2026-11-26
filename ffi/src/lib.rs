@@ -282,11 +282,19 @@ pub unsafe extern "C" fn pdfgen_doc_add_table(doc: *mut PdfgenDoc, t: *const Pdf
 
 /// Renders the document. On success `*out_data` points to `*out_len` bytes that
 /// must be released with `pdfgen_buffer_free(*out_data, *out_len)`.
+/// On any failure (including NULL `doc`/out pointers and caught panics) every
+/// non-NULL out pointer is set to NULL / 0 before returning the error code.
 ///
 /// # Safety
-/// `doc` live handle; `out_data` and `out_len` valid for writes.
+/// `doc` live handle or NULL; `out_data` and `out_len` NULL or valid for writes.
 #[no_mangle]
 pub unsafe extern "C" fn pdfgen_doc_render(doc: *const PdfgenDoc, out_data: *mut *mut u8, out_len: *mut usize) -> i32 {
+    if !out_data.is_null() {
+        *out_data = ptr::null_mut();
+    }
+    if !out_len.is_null() {
+        *out_len = 0;
+    }
     guard(|| {
         let doc = tri!(doc.as_ref().ok_or_else(|| fail(PDFGEN_ERR_NULL, "null doc")));
         if out_data.is_null() || out_len.is_null() {
@@ -299,11 +307,7 @@ pub unsafe extern "C" fn pdfgen_doc_render(doc: *const PdfgenDoc, out_data: *mut
                 *out_data = Box::into_raw(b).cast::<u8>();
                 PDFGEN_OK
             }
-            Err(e) => {
-                *out_data = ptr::null_mut();
-                *out_len = 0;
-                fail(PDFGEN_ERR_CORE, &e.to_string())
-            }
+            Err(e) => fail(PDFGEN_ERR_CORE, &e.to_string()),
         }
     })
 }

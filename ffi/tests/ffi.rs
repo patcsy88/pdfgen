@@ -97,15 +97,24 @@ fn errors_are_codes_with_messages_not_panics() {
         assert_eq!(pdfgen_table_add_row(t, rp.as_ptr(), 2), PDFGEN_OK);
         assert_eq!(pdfgen_doc_add_table(doc, t), PDFGEN_OK);
         pdfgen_table_free(t);
-        let (mut d, mut l) = (ptr::null_mut(), 0usize);
+        let sentinel = 0xdead as *mut u8;
+        let (mut d, mut l) = (sentinel, 7usize);
         assert_eq!(pdfgen_doc_render(doc, &mut d, &mut l), PDFGEN_ERR_CORE);
         assert!(d.is_null() && l == 0);
         assert!(last_error().contains("more cells than columns"), "{}", last_error());
 
         assert!(pdfgen_table_new(ptr::null(), 0, 10.0).is_null());
         assert!(pdfgen_table_new(w.as_ptr(), 1, -1.0).is_null());
+        // Failure clears whichever out-params are non-NULL, even on early NULL checks.
+        let (mut d, mut l) = (sentinel, 7usize);
         assert_eq!(pdfgen_doc_render(ptr::null(), &mut d, &mut l), PDFGEN_ERR_NULL);
+        assert!(d.is_null() && l == 0);
+        d = sentinel;
+        assert_eq!(pdfgen_doc_render(doc, &mut d, ptr::null_mut()), PDFGEN_ERR_NULL);
+        assert!(d.is_null());
+        l = 7;
         assert_eq!(pdfgen_doc_render(doc, ptr::null_mut(), &mut l), PDFGEN_ERR_NULL);
+        assert_eq!(l, 0);
 
         pdfgen_doc_free(doc);
         pdfgen_doc_free(ptr::null_mut()); // no-op by contract
