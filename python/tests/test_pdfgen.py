@@ -46,7 +46,7 @@ def page_count(path: Path) -> int:
 
 def qdf(path: Path) -> str:
     """The PDF with all streams and object streams decompressed, as text."""
-    out = path.with_suffix(".qdf.tmp")
+    out = path.with_suffix(".qdf")
     status, output = qpdf("--qdf", "--object-streams=disable", str(path), str(out))
     assert status in (0, 3), output
     text = out.read_text("latin-1")

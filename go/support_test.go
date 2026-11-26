@@ -79,7 +79,7 @@ func pageCount(t *testing.T, path string) int {
 // qdf returns the PDF with all streams and object streams decompressed, as text.
 func qdf(t *testing.T, path string) string {
 	t.Helper()
-	tmp := path + ".qdf.tmp"
+	tmp := path + ".qdf"
 	status, out := qpdf(t, "--qdf", "--object-streams=disable", path, tmp)
 	if status != 0 && status != 3 {
 		t.Fatalf("qpdf --qdf: %s", out)

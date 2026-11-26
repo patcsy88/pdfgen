@@ -75,7 +75,7 @@ final class Support {
 
     /** The PDF with all streams and object streams decompressed, as text. */
     static String qdf(Path path) {
-        Path out = OUT.resolve(path.getFileName() + ".qdf.tmp");
+        Path out = OUT.resolve(path.getFileName() + ".qdf");
         Result r = qpdf("--qdf", "--object-streams=disable", path.toString(), out.toString());
         if (r.status() != 0 && r.status() != 3) {
             throw new AssertionError(r.output());
@@ -117,7 +117,7 @@ final class Support {
         out.putShort((short) h).putShort((short) w).put(new byte[] {0x01, 0x01, 0x11, 0x00});
         for (int classId : new int[] {0x00, 0x10}) {
             out.put(new byte[] {(byte) 0xff, (byte) 0xc4, 0x00, 0x14, (byte) classId, 0x01});
-            out.put(new byte[16]);
+            out.put(new byte[15]);
             out.put((byte) 0x00);
         }
         out.put(new byte[] {(byte) 0xff, (byte) 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00});
