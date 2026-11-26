@@ -197,6 +197,19 @@ describe('tables', () => {
     }
   });
 
+  it('rejects strings with an embedded NUL instead of truncating them', () => {
+    const doc = new PdfDocument();
+    const t = new PdfTable([50, 50]);
+    try {
+      assert.throws(() => doc.addText('AAA\0BBB'), (e) => e instanceof TypeError && /text/.test(e.message) && /NUL/.test(e.message));
+      assert.throws(() => t.setHeader('ok', 'A\0B'), (e) => e instanceof TypeError && /cells\[1\]/.test(e.message));
+      assert.throws(() => t.addRow('A\0B'), (e) => e instanceof TypeError && /cells\[0\]/.test(e.message));
+    } finally {
+      t.dispose();
+      doc.dispose();
+    }
+  });
+
   it('rejects bad table arguments', () => {
     assert.throws(() => new PdfTable([]), (e) => e instanceof PdfError && e.code === -3);
     assert.throws(() => new PdfTable([0], 10), PdfError);

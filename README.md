@@ -332,6 +332,8 @@ writeFileSync('report.pdf', doc.render());   // render() returns a Buffer
 ```
 
 Failures throw `PdfError` with the native message and the C error code in `code`.
+A non-string argument, or a string containing a NUL (which the C layer would
+silently truncate), throws `TypeError` before the call.
 Call `dispose()` (or use `using`) to free native memory; a finalizer frees anything
 left over. The library path defaults to `target/release/libpdfgen_ffi.so` in this
 repository; set `PDFGEN_LIB` to load it from elsewhere.

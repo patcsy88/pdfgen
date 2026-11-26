@@ -29,6 +29,7 @@ function check(rc) {
 
 function requireString(value, name) {
   if (typeof value !== 'string') throw new TypeError(`${name} must be a string`);
+  if (value.includes('\0')) throw new TypeError(`${name} must not contain a NUL character`);
   return value;
 }
 
