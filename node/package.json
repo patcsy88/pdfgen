@@ -22,5 +22,8 @@
   },
   "devDependencies": {
     "license-checker-rseidelsohn": "5.0.1"
+  },
+  "overrides": {
+    "minimatch": "^11.0.1"
   }
 }
