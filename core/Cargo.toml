@@ -13,4 +13,4 @@ name = "pdfgen_core"
 miniz_oxide = "0.8"
 
 [dev-dependencies]
-lopdf = { version = "0.36", default-features = false }
+lopdf = { version = "0.42", default-features = false }
