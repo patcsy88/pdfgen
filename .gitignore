@@ -8,3 +8,5 @@ node/test-output/
 python/test-output/
 __pycache__/
 python/*.egg-info/
+java/target/
+java/test-output/

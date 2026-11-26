@@ -28,6 +28,8 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
 | .NET SDK 10 | the wrapper and its tests | 10.0.404 |
 | Node.js | the Node wrapper and its tests (`engines` is `>=24`) | 26.13.1, not 24: see [Use from Node.js](#use-from-nodejs) |
 | Python 3 | the Python wrapper and its tests (`requires-python` is `>=3.10`); also regenerates font data | 3.11.2 |
+| JDK 25 | the Java wrapper and its tests (`maven.compiler.release` is 25) | 25.0.5.1 (Microsoft build) |
+| Maven | building and testing `java/` | 3.8.7 |
 
 Debian/Ubuntu:
 
@@ -72,6 +74,11 @@ cd node && npm run license-check && npm run license-check:all
 # Python: needs the release library above and qpdf on PATH. Standard library only.
 cd python && python3 -m unittest discover -s tests   # writes python/test-output/*.pdf
 cd .. && PDFGEN_CHECK_DIR=python/test-output cargo test -p pdfgen-core --test external_pdfs
+
+# Java: needs the release library above, JDK 25, Maven and qpdf on PATH.
+cd java && mvn test                                  # writes java/test-output/*.pdf
+cd .. && PDFGEN_CHECK_DIR=java/test-output cargo test -p pdfgen-core --test external_pdfs
+cd java && python3 license-check.py                  # every Maven package, test scope included
 ```
 
 The .NET build fails with a clear message if that library is missing. NuGet
@@ -178,6 +185,47 @@ The Python tests write every PDF to `python/test-output/` (git-ignored) and requ
 separately over that directory with the `external_pdfs` test shown under Build and
 test.
 
+## Use from Java
+
+The wrapper in `java/` calls `libpdfgen_ffi.so` through the Panama foreign function
+API (`java.lang.foreign`, final since Java 22), the same C ABI the other wrappers
+use. It has no runtime dependencies; TestNG is test scope only.
+
+```java
+import io.github.patcsy88.pdfgen.*;
+
+try (PdfDocument doc = new PdfDocument()) {
+    doc.addText("Quarterly report", Font.HELVETICA_BOLD, 20);
+
+    try (PdfTable table = new PdfTable(new float[] {80, 120}, 10)) {
+        table.setHeader("Region", "Total").addRow("North", "1200");
+        doc.addTable(table);          // copies the table; you still close it
+    }
+
+    doc.save(Path.of("report.pdf"));  // or: byte[] pdf = doc.render();
+}
+```
+
+Failures throw `PdfException` with the native message and the C error code in
+`code()`. Arguments the C layer would mangle (a NUL in a string, a negative value for
+an unsigned parameter) throw `IllegalArgumentException` before the call, and null
+arguments throw `NullPointerException`. Use try-with-resources or `close()` to free
+native memory; a `Cleaner` frees anything left over. A closed object throws
+`IllegalStateException`. A document or table is not thread-safe; use one per thread.
+
+The library is found at `target/release/libpdfgen_ffi.so` by walking up from the
+working directory; set `PDFGEN_LIB` to load it from elsewhere. The Surefire
+configuration passes `--enable-native-access=ALL-UNNAMED` to the JVM; running without
+that flag was not tested. The build sets `maven.compiler.release` to 25, and the tests
+ran on JDK 25.0.5.1 only; the API is final from Java 22, but 22 to 24 are untested. On
+Debian with Microsoft's package feed: `sudo apt install msopenjdk-25 maven`.
+
+The Java tests (25) write every PDF to `java/test-output/` (git-ignored) and require
+`qpdf --check` to pass on each. The Arlington and content-stream checks run
+separately over that directory with the `external_pdfs` test shown under Build and
+test. `license-check.py` reads each resolved package's license from its POM and
+exits 1 unless it is one of the seven allowed licenses.
+
 ## Use from Node.js
 
 The wrapper in `node/` loads `libpdfgen_ffi.so` through [koffi](https://koffi.dev)
@@ -214,8 +262,9 @@ under Build and test.
 ## C ABI
 
 Library name `pdfgen_ffi`. There is no generated header; the functions are
-declared in `ffi/src/lib.rs` and, as P/Invoke, in `dotnet/PdfGen/Native.cs`, and,
-for koffi, in `node/src/native.js`.
+declared in `ffi/src/lib.rs` and, as P/Invoke, in `dotnet/PdfGen/Native.cs`, for
+koffi in `node/src/native.js`, for ctypes in `python/pdfgen/_native.py`, and for the
+Java foreign function API in `java/src/main/java/io/github/patcsy88/pdfgen/Native.java`.
 
 - Handles are opaque pointers. Free each with its matching `*_free`; passing NULL
   to a `*_free` function is a no-op.
@@ -324,12 +373,15 @@ pdfcpu version
 | Adobe core-14 AFM files (`core/afm/`) | Adobe's own notice, in `core/afm/LICENSE`: use, copy and distribute for any purpose if all copyright notices are kept and the AFM files are never distributed without that `LICENSE` file |
 | NuGet test packages (13) | MIT or Apache-2.0 |
 | Python wrapper (`python/`) | no third-party packages; standard-library `ctypes` only |
+| Java wrapper (`java/`) | no runtime dependencies; `java.lang.foreign` only |
+| Maven test packages (4: `testng` 7.11.0, `jcommander` 1.83, `slf4j-api` 2.0.16, `jquery` 3.7.1) | Apache-2.0, Apache-2.0, MIT, MIT; test scope only, none shipped |
 | `koffi` 3.3.8 (Node wrapper, shipped dependency) | MIT |
 | `@koromix/koffi-linux-x64` 3.3.8 (koffi's prebuilt binary, shipped dependency) | MIT |
 | npm dev tools (`license-checker-rseidelsohn` and its dependencies, 130 packages in all, test and CI only) | ISC 55, MIT 48, BlueOak-1.0.0 12, Apache-2.0 9, BSD-2-Clause 2, BSD-3-Clause 1, CC-BY-3.0 1, CC0-1.0 1, (MIT AND CC-BY-3.0) 1 |
 
 `cargo deny check licenses` covers the Rust crates only. It cannot see the AFM
-files, the NuGet packages or the npm packages. The built shared library links
+files, the NuGet packages, the npm packages or the Maven packages. The Maven build
+plugins are not covered by `java/license-check.py`. The built shared library links
 dynamically against glibc and `libgcc_s` (`ldd target/release/libpdfgen_ffi.so`).
 
 The npm check on shipped dependencies uses the seven-license allowlist (MIT,
