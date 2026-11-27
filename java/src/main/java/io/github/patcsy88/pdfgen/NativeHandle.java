@@ -5,6 +5,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.ValueLayout;
 import java.lang.ref.Cleaner;
+import java.util.concurrent.locks.ReentrantLock;
 
 /** Owns one native handle; a {@link Cleaner} frees it if {@link #close()} is never called. */
 abstract class NativeHandle implements AutoCloseable {
@@ -25,7 +26,8 @@ abstract class NativeHandle implements AutoCloseable {
     private final String what;
     private final MemorySegment handle;
     private final Cleaner.Cleanable cleanable;
-    private boolean closed;
+    private final ReentrantLock lock = new ReentrantLock();
+    private boolean closed; // guarded by lock
 
     NativeHandle(String what, MemorySegment handle, boolean table) {
         this.what = what;
@@ -33,18 +35,43 @@ abstract class NativeHandle implements AutoCloseable {
         this.cleanable = CLEANER.register(this, new Releaser(handle, table));
     }
 
-    final MemorySegment handle() {
-        if (closed) {
-            throw new IllegalStateException(what + " is closed");
+    /**
+     * The handle, locked against {@link #close()} until this is closed. Use in try-with-resources around
+     * every native call. The unlock also keeps the owner reachable, so the Cleaner cannot free the handle
+     * mid-call. When two objects are held, always hold the document first, then the table.
+     */
+    final class Hold implements AutoCloseable {
+        final MemorySegment handle;
+
+        private Hold(MemorySegment handle) {
+            this.handle = handle;
         }
-        return handle;
+
+        @Override
+        public void close() {
+            lock.unlock();
+        }
     }
 
-    /** Frees the native object. Safe to call more than once. */
+    final Hold hold() {
+        lock.lock();
+        if (closed) {
+            lock.unlock();
+            throw new IllegalStateException(what + " is closed");
+        }
+        return new Hold(handle);
+    }
+
+    /** Frees the native object. Safe to call more than once and from several threads; waits for a call in flight. */
     @Override
     public final void close() {
-        closed = true;
-        cleanable.clean();
+        lock.lock();
+        try {
+            closed = true;
+            cleanable.clean();
+        } finally {
+            lock.unlock();
+        }
     }
 
     // Helpers shared by the public classes.

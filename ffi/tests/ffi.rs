@@ -142,6 +142,32 @@ fn error_message_is_per_thread() {
     }
 }
 
+// A pdfgen call from another thread-local's destructor can run after this library's own error slot is
+// destroyed. Before `try_with`, that panicked twice (once in `set_error`, again in `guard`) and aborted.
+#[test]
+fn calls_from_a_thread_local_destructor_do_not_panic() {
+    struct CallsOnDrop;
+    impl Drop for CallsOnDrop {
+        fn drop(&mut self) {
+            unsafe {
+                assert_eq!(pdfgen_doc_add_page_break(ptr::null_mut()), PDFGEN_ERR_NULL);
+                // The slot is gone, so there is no message to return; the pointer must still be a valid empty C string.
+                assert_eq!(CStr::from_ptr(pdfgen_last_error()).to_bytes(), b"");
+            }
+        }
+    }
+    thread_local! {
+        static DROPPER: CallsOnDrop = const { CallsOnDrop };
+    }
+    std::thread::spawn(|| {
+        // Registered first, so on Linux it is destroyed after the error slot created by the call below.
+        DROPPER.with(|_| {});
+        unsafe { pdfgen_doc_add_page_break(ptr::null_mut()) };
+    })
+    .join()
+    .unwrap();
+}
+
 #[test]
 fn jpeg_through_the_c_abi() {
     // Same minimal valid grayscale JPEG as the core test: 8x8, one flat block.

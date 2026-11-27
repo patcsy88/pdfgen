@@ -137,6 +137,87 @@ func TestClosedObjectsReturnErrClosedAndDoubleCloseIsSafe(t *testing.T) {
 	}
 }
 
+// Copying the struct copies a handle reference, not a second owner: closing either copy closes both and
+// the native object is freed once.
+func TestCopiedDocumentAndTableShareOneHandle(t *testing.T) {
+	d, err := pdfgen.NewDocument()
+	must(t, err)
+	cp := *d
+	cp.Close()
+	if err := d.AddText("x", pdfgen.Helvetica, 12); err != pdfgen.ErrClosed {
+		t.Errorf("original after closing its copy: %v", err)
+	}
+	d.Close()
+
+	tb, err := pdfgen.NewTable([]float32{10}, 10)
+	must(t, err)
+	tcp := *tb
+	tb.Close()
+	if err := tcp.AddRow("x"); err != pdfgen.ErrClosed {
+		t.Errorf("table copy after closing the original: %v", err)
+	}
+	tcp.Close()
+}
+
+func TestConcurrentCloseFreesTheHandleOnce(t *testing.T) {
+	for range 50 {
+		d, err := pdfgen.NewDocument()
+		must(t, err)
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() { defer wg.Done(); d.Close() }()
+		}
+		wg.Wait()
+		if _, err := d.Render(); err != pdfgen.ErrClosed {
+			t.Fatalf("Render after concurrent Close: %v", err)
+		}
+	}
+}
+
+// Close from another goroutine waits for a Render in flight instead of freeing the handle under it. The
+// worker renders in a loop and Close starts only after its first render succeeded, so later renders are
+// very likely in flight when Close runs; each must return a valid PDF or ErrClosed.
+func TestCloseDuringRenderWaitsForTheRender(t *testing.T) {
+	text := strings.Repeat("lorem ipsum dolor sit amet ", 20000)
+	for range 5 {
+		d, err := pdfgen.NewDocument()
+		must(t, err)
+		must(t, d.AddText(text, pdfgen.Helvetica, 12))
+		started := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			for i := 0; ; i++ {
+				pdf, err := d.Render()
+				if err == pdfgen.ErrClosed {
+					done <- nil
+					return
+				}
+				if err != nil {
+					done <- err
+					return
+				}
+				if !bytes.HasPrefix(pdf, []byte("%PDF-2.0")) {
+					done <- fmt.Errorf("header %q", pdf[:min(len(pdf), 8)])
+					return
+				}
+				if i == 0 {
+					close(started)
+				}
+			}
+		}()
+		select {
+		case <-started:
+		case err := <-done:
+			t.Fatalf("worker stopped before its first render finished: %v", err)
+		}
+		d.Close()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestManyIndependentDocuments(t *testing.T) {
 	for i := range 200 {
 		pdf := render(t, func(d *pdfgen.Document) { must(t, d.AddText(fmt.Sprintf("doc %d", i), pdfgen.Courier, 10)) })

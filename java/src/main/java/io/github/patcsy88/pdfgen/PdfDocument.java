@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.lang.ref.Reference;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -32,7 +31,10 @@ public final class PdfDocument extends NativeHandle {
             throw new NullPointerException("font must not be null");
         }
         try (Arena arena = Arena.ofConfined()) {
-            PdfException.check(Native.get().docAddText(handle(), utf8(arena, text, "text"), font.code, size));
+            MemorySegment utf8 = utf8(arena, text, "text");
+            try (Hold h = hold()) {
+                PdfException.check(Native.get().docAddText(h.handle, utf8, font.code, size));
+            }
         }
         return this;
     }
@@ -43,7 +45,9 @@ public final class PdfDocument extends NativeHandle {
     }
 
     public PdfDocument addPageBreak() {
-        PdfException.check(Native.get().docAddPageBreak(handle()));
+        try (Hold h = hold()) {
+            PdfException.check(Native.get().docAddPageBreak(h.handle));
+        }
         return this;
     }
 
@@ -57,8 +61,10 @@ public final class PdfDocument extends NativeHandle {
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment data = arena.allocateFrom(ValueLayout.JAVA_BYTE, pixels);
-            PdfException.check(
-                    Native.get().docAddImageRaw(handle(), width, height, channels, data, pixels.length, widthPt));
+            try (Hold h = hold()) {
+                PdfException.check(
+                        Native.get().docAddImageRaw(h.handle, width, height, channels, data, pixels.length, widthPt));
+            }
         }
         return this;
     }
@@ -69,7 +75,9 @@ public final class PdfDocument extends NativeHandle {
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment data = arena.allocateFrom(ValueLayout.JAVA_BYTE, jpeg);
-            PdfException.check(Native.get().docAddImageJpeg(handle(), data, jpeg.length, widthPt));
+            try (Hold h = hold()) {
+                PdfException.check(Native.get().docAddImageJpeg(h.handle, data, jpeg.length, widthPt));
+            }
         }
         return this;
     }
@@ -79,11 +87,8 @@ public final class PdfDocument extends NativeHandle {
         if (table == null) {
             throw new NullPointerException("table must not be null");
         }
-        try {
-            PdfException.check(Native.get().docAddTable(handle(), table.handle()));
-        } finally {
-            // Keep the Cleaner from freeing the table's handle while the native call still reads it.
-            Reference.reachabilityFence(table);
+        try (Hold d = hold(); Hold t = table.hold()) {
+            PdfException.check(Native.get().docAddTable(d.handle, t.handle));
         }
         return this;
     }
@@ -93,7 +98,9 @@ public final class PdfDocument extends NativeHandle {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment outData = arena.allocate(ValueLayout.ADDRESS);
             MemorySegment outLen = arena.allocate(ValueLayout.JAVA_LONG);
-            PdfException.check(Native.get().docRender(handle(), outData, outLen));
+            try (Hold h = hold()) {
+                PdfException.check(Native.get().docRender(h.handle, outData, outLen));
+            }
             long len = outLen.get(ValueLayout.JAVA_LONG, 0);
             MemorySegment data = outData.get(ValueLayout.ADDRESS, 0);
             try {
@@ -101,9 +108,6 @@ public final class PdfDocument extends NativeHandle {
             } finally {
                 Native.get().bufferFree(data, len);
             }
-        } finally {
-            // Nothing touches `this` after the downcall; without the fence the Cleaner may free the handle mid-render.
-            Reference.reachabilityFence(this);
         }
     }
 

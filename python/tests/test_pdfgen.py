@@ -4,6 +4,7 @@
 qpdf is not a PDF 2.0 conformance validator; see README.md for what the checks cover.
 """
 
+import copy
 import re
 import shutil
 import struct
@@ -365,6 +366,65 @@ class LifecycleTests(unittest.TestCase):
             t.join()
         self.assertEqual(len(pdfs), 200)
         self.assertTrue(all(re.match(rb"%PDF-2\.0", p) for p in pdfs))
+
+    def test_copying_or_pickling_a_handle_owner_is_refused(self):
+        import pickle
+
+        with PdfDocument() as doc, PdfTable([10]) as table:
+            for obj in (doc, table):
+                with self.assertRaises(TypeError):
+                    copy.copy(obj)
+                with self.assertRaises(TypeError):
+                    copy.deepcopy(obj)
+                with self.assertRaises(TypeError):
+                    pickle.dumps(obj)
+            checked("copy_refused.pdf", doc.add_text("still usable").render())
+
+    def test_close_during_a_render_on_another_thread_waits_for_it(self):
+        # The worker renders in a loop and close() starts only after its first render succeeded, so later
+        # renders are very likely in flight when close() runs; each must return a valid PDF or raise closed.
+        text = "lorem ipsum dolor sit amet " * 20000
+        for _ in range(5):
+            doc = PdfDocument()
+            doc.add_text(text)
+            started = threading.Event()
+            problems: list[object] = []
+
+            def render_loop() -> None:
+                first = True
+                while True:
+                    try:
+                        pdf = doc.render()
+                    except ValueError:  # closed: the only acceptable way to stop
+                        return
+                    except BaseException as e:
+                        problems.append(e)
+                        started.set()
+                        return
+                    if not pdf.startswith(b"%PDF-2.0"):
+                        problems.append(pdf[:8])
+                        started.set()
+                        return
+                    if first:
+                        first = False
+                        started.set()
+
+            t = threading.Thread(target=render_loop)
+            t.start()
+            self.assertTrue(started.wait(60), "the first render never finished")
+            doc.close()
+            t.join()
+            self.assertEqual(problems, [])
+
+    def test_concurrent_close_calls_free_the_handle_once(self):
+        doc = PdfDocument()
+        threads = [threading.Thread(target=doc.close) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        with self.assertRaisesRegex(ValueError, "closed"):
+            doc.render()
 
 
 if __name__ == "__main__":

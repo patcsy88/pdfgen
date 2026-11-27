@@ -32,7 +32,9 @@ public final class PdfTable extends NativeHandle {
     public PdfTable setHeader(String... cells) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment array = cellArray(arena, cells);
-            PdfException.check(Native.get().tableSetHeader(handle(), array, cells.length));
+            try (Hold h = hold()) {
+                PdfException.check(Native.get().tableSetHeader(h.handle, array, cells.length));
+            }
         }
         return this;
     }
@@ -40,7 +42,9 @@ public final class PdfTable extends NativeHandle {
     public PdfTable addRow(String... cells) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment array = cellArray(arena, cells);
-            PdfException.check(Native.get().tableAddRow(handle(), array, cells.length));
+            try (Hold h = hold()) {
+                PdfException.check(Native.get().tableAddRow(h.handle, array, cells.length));
+            }
         }
         return this;
     }

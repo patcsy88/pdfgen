@@ -30,7 +30,9 @@ fn set_error(msg: impl Into<Vec<u8>>) {
         let v: Vec<u8> = e.into_vec().into_iter().filter(|&b| b != 0).collect();
         CString::new(v).unwrap()
     });
-    LAST_ERROR.with(|l| *l.borrow_mut() = c);
+    // `try_with` fails instead of panicking once this thread's storage is destroyed (a pdfgen call from
+    // another thread-local's destructor); a panic here would escape `guard` and cross the C boundary.
+    let _ = LAST_ERROR.try_with(|l| *l.borrow_mut() = c);
 }
 
 fn fail(code: i32, msg: &str) -> i32 {
@@ -87,7 +89,8 @@ pub struct PdfgenTable(Table);
 /// Last error message for this thread; never NULL. Do not free.
 #[no_mangle]
 pub extern "C" fn pdfgen_last_error() -> *const c_char {
-    LAST_ERROR.with(|l| l.borrow().as_ptr())
+    // After the thread's storage is destroyed there is no message; hand back an empty static string.
+    LAST_ERROR.try_with(|l| l.borrow().as_ptr()).unwrap_or(b"\0".as_ptr().cast())
 }
 
 /// Library version, static NUL-terminated string. Do not free.

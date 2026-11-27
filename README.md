@@ -184,7 +184,8 @@ doc.Save("report.pdf");       // or: byte[] pdf = doc.Render();
 ```
 
 Failures throw `PdfException` with the native message and the C error code in
-`Code`. `PdfDocument` is not thread-safe; use one per thread. The native library
+`Code`. `PdfDocument` is not thread-safe for concurrent builds; use one per thread. `Dispose` and the
+finalizer wait for a native call in flight on another thread. The native library
 must be next to your assembly or on the loader path; the test project copies it
 from `target/release/`.
 
@@ -247,7 +248,8 @@ Failures throw `PdfException` with the native message and the C error code in
 an unsigned parameter) throw `IllegalArgumentException` before the call, and null
 arguments throw `NullPointerException`. Use try-with-resources or `close()` to free
 native memory; a `Cleaner` frees anything left over. A closed object throws
-`IllegalStateException`. A document or table is not thread-safe; use one per thread.
+`IllegalStateException`. A document or table is not thread-safe for concurrent builds; use one per thread.
+`close()` waits for a native call in flight on another thread.
 
 The library is found at `target/release/libpdfgen_ffi.so` by walking up from the
 working directory; set `PDFGEN_LIB` to load it from elsewhere. The Surefire
@@ -294,8 +296,9 @@ Every method that can fail returns an `error`; check it (the example drops some 
 brevity). Native failures are `*pdfgen.Error` with the native message and the C error
 code in `Code`. A NUL in a string is rejected before the call, and a closed object
 returns `pdfgen.ErrClosed`. `Close` is safe to call twice, and a cleanup frees anything
-left unclosed. A document or table is not safe for use from several goroutines at once;
-use one per goroutine.
+left unclosed. A document or table must not be built from several goroutines at once; use one per
+goroutine. `Close` is safe from any goroutine, waits for a call in flight, and copying a `Document` or
+`Table` value shares one handle instead of double-freeing.
 
 The library keeps its last error message per OS thread, so each failing call and the
 read of its message run on one locked OS thread. The test

@@ -48,10 +48,14 @@ internal static class Interop
     }
 }
 
-/// <summary>A table under construction. Dispose it after adding it to a document.</summary>
+/// <summary>
+/// A table under construction. Dispose it after adding it to a document. Every native call and
+/// <see cref="Dispose"/> hold the object's gate, so Dispose from another thread waits for a call in flight.
+/// </summary>
 public sealed class PdfTable : IDisposable
 {
     private IntPtr _handle;
+    internal readonly object Gate = new();
 
     public PdfTable(IReadOnlyList<float> columnWidths, float fontSize = 10f)
     {
@@ -61,36 +65,53 @@ public sealed class PdfTable : IDisposable
         if (_handle == IntPtr.Zero) throw new PdfException(-3, Interop.LastError());
     }
 
+    /// <summary>The native handle. The caller must hold <see cref="Gate"/> for as long as it uses it.</summary>
     internal IntPtr Handle => _handle != IntPtr.Zero ? _handle : throw new ObjectDisposedException(nameof(PdfTable));
 
     public PdfTable SetHeader(params string[] cells)
     {
-        var h = Handle;
-        Interop.Check(Interop.WithUtf8(cells, p => Native.pdfgen_table_set_header(h, p, (UIntPtr)p.Length)));
+        lock (Gate)
+        {
+            var h = Handle;
+            Interop.Check(Interop.WithUtf8(cells, p => Native.pdfgen_table_set_header(h, p, (UIntPtr)p.Length)));
+            GC.KeepAlive(this);
+        }
         return this;
     }
 
     public PdfTable AddRow(params string[] cells)
     {
-        var h = Handle;
-        Interop.Check(Interop.WithUtf8(cells, p => Native.pdfgen_table_add_row(h, p, (UIntPtr)p.Length)));
+        lock (Gate)
+        {
+            var h = Handle;
+            Interop.Check(Interop.WithUtf8(cells, p => Native.pdfgen_table_add_row(h, p, (UIntPtr)p.Length)));
+            GC.KeepAlive(this);
+        }
         return this;
     }
 
     public void Dispose()
     {
-        var h = Interlocked.Exchange(ref _handle, IntPtr.Zero);
-        if (h != IntPtr.Zero) Native.pdfgen_table_free(h);
+        lock (Gate)
+        {
+            var h = _handle;
+            _handle = IntPtr.Zero;
+            if (h != IntPtr.Zero) Native.pdfgen_table_free(h);
+        }
         GC.SuppressFinalize(this);
     }
 
     ~PdfTable() => Dispose();
 }
 
-/// <summary>A document being built. Not thread-safe; use one instance per thread.</summary>
+/// <summary>
+/// A document being built. Every native call and <see cref="Dispose"/> hold the object's gate, so Dispose from
+/// another thread waits for a call in flight; the native object itself is still not safe for concurrent use.
+/// </summary>
 public sealed class PdfDocument : IDisposable
 {
     private IntPtr _handle;
+    private readonly object _gate = new();
 
     public PdfDocument()
     {
@@ -101,21 +122,30 @@ public sealed class PdfDocument : IDisposable
     /// <summary>Version of the native library.</summary>
     public static string NativeVersion => Marshal.PtrToStringUTF8(Native.pdfgen_version()) ?? "";
 
+    /// <summary>The native handle. The caller must hold <c>_gate</c> for as long as it uses it.</summary>
     private IntPtr Handle => _handle != IntPtr.Zero ? _handle : throw new ObjectDisposedException(nameof(PdfDocument));
 
     public PdfDocument AddText(string text, PdfFont font = PdfFont.Helvetica, float size = 12f)
     {
         ArgumentNullException.ThrowIfNull(text);
-        var h = Handle;
-        var p = Marshal.StringToCoTaskMemUTF8(text);
-        try { Interop.Check(Native.pdfgen_doc_add_text(h, p, (int)font, size)); }
-        finally { Marshal.FreeCoTaskMem(p); }
+        lock (_gate)
+        {
+            var h = Handle;
+            var p = Marshal.StringToCoTaskMemUTF8(text);
+            try { Interop.Check(Native.pdfgen_doc_add_text(h, p, (int)font, size)); }
+            finally { Marshal.FreeCoTaskMem(p); }
+            GC.KeepAlive(this);
+        }
         return this;
     }
 
     public PdfDocument AddPageBreak()
     {
-        Interop.Check(Native.pdfgen_doc_add_page_break(Handle));
+        lock (_gate)
+        {
+            Interop.Check(Native.pdfgen_doc_add_page_break(Handle));
+            GC.KeepAlive(this);
+        }
         return this;
     }
 
@@ -124,15 +154,23 @@ public sealed class PdfDocument : IDisposable
     {
         ArgumentNullException.ThrowIfNull(pixels);
         if (width < 0 || height < 0 || channels < 0) throw new ArgumentOutOfRangeException(nameof(width));
-        Interop.Check(Native.pdfgen_doc_add_image_raw(
-            Handle, (uint)width, (uint)height, (uint)channels, pixels, (UIntPtr)pixels.Length, widthPt));
+        lock (_gate)
+        {
+            Interop.Check(Native.pdfgen_doc_add_image_raw(
+                Handle, (uint)width, (uint)height, (uint)channels, pixels, (UIntPtr)pixels.Length, widthPt));
+            GC.KeepAlive(this);
+        }
         return this;
     }
 
     public PdfDocument AddJpeg(byte[] jpeg, float widthPt)
     {
         ArgumentNullException.ThrowIfNull(jpeg);
-        Interop.Check(Native.pdfgen_doc_add_image_jpeg(Handle, jpeg, (UIntPtr)jpeg.Length, widthPt));
+        lock (_gate)
+        {
+            Interop.Check(Native.pdfgen_doc_add_image_jpeg(Handle, jpeg, (UIntPtr)jpeg.Length, widthPt));
+            GC.KeepAlive(this);
+        }
         return this;
     }
 
@@ -140,16 +178,27 @@ public sealed class PdfDocument : IDisposable
     public PdfDocument AddTable(PdfTable table)
     {
         ArgumentNullException.ThrowIfNull(table);
-        Interop.Check(Native.pdfgen_doc_add_table(Handle, table.Handle));
-        GC.KeepAlive(table);
+        // Lock order is always document, then table; nothing locks them the other way round.
+        lock (_gate)
+        lock (table.Gate)
+        {
+            Interop.Check(Native.pdfgen_doc_add_table(Handle, table.Handle));
+            GC.KeepAlive(this);
+            GC.KeepAlive(table);
+        }
         return this;
     }
 
     /// <summary>Lays out the document and returns the PDF bytes.</summary>
     public byte[] Render()
     {
-        Interop.Check(Native.pdfgen_doc_render(Handle, out var data, out var len));
-        GC.KeepAlive(this);
+        IntPtr data;
+        UIntPtr len;
+        lock (_gate)
+        {
+            Interop.Check(Native.pdfgen_doc_render(Handle, out data, out len));
+            GC.KeepAlive(this);
+        }
         try
         {
             var bytes = new byte[checked((int)len)];
@@ -163,8 +212,12 @@ public sealed class PdfDocument : IDisposable
 
     public void Dispose()
     {
-        var h = Interlocked.Exchange(ref _handle, IntPtr.Zero);
-        if (h != IntPtr.Zero) Native.pdfgen_doc_free(h);
+        lock (_gate)
+        {
+            var h = _handle;
+            _handle = IntPtr.Zero;
+            if (h != IntPtr.Zero) Native.pdfgen_doc_free(h);
+        }
         GC.SuppressFinalize(this);
     }
 

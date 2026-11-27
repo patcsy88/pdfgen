@@ -1,8 +1,10 @@
 // Package pdfgen builds PDF reports through the pdfgen C ABI (libpdfgen_ffi) using cgo.
 //
 // The native library keeps its last error message per OS thread, so every call that can fail runs on a
-// locked OS thread and reads the message before unlocking. A Document or Table must not be used from
-// several goroutines at once; use one per goroutine.
+// locked OS thread and reads the message before unlocking. Each Document and Table serialises its own
+// calls, Close included, with a mutex: Close may be called from any goroutine, waits for a call in flight,
+// and copying a Document or Table value shares one native handle. Building a document from several
+// goroutines at once is memory-safe but leaves the order of the calls undefined; use one per goroutine.
 package pdfgen
 
 /*
@@ -40,6 +42,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"unsafe"
 )
 
@@ -118,10 +121,50 @@ func cStrings(cells []string) (arr **C.char, free func(), err error) {
 	return arr, free, nil
 }
 
+// owned is a native handle shared by every copy of the Go value that wraps it. The mutex makes Close wait
+// for a call in flight and makes concurrent Close calls free the handle once. The handle is untyped
+// because cgo's incomplete struct types cannot be type arguments.
+type owned struct {
+	mu      sync.Mutex
+	handle  unsafe.Pointer
+	free    func(unsafe.Pointer)
+	cleanup runtime.Cleanup
+}
+
+// newOwned takes ownership of h. free must not reference the returned value, or it would never be
+// collected.
+func newOwned(h unsafe.Pointer, free func(unsafe.Pointer)) *owned {
+	o := &owned{handle: h, free: free}
+	o.cleanup = runtime.AddCleanup(o, free, h)
+	return o
+}
+
+// use runs f with the live handle, or returns ErrClosed.
+func (o *owned) use(f func(unsafe.Pointer) error) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.handle == nil {
+		return ErrClosed
+	}
+	return f(o.handle)
+}
+
+func (o *owned) close() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.handle != nil {
+		o.cleanup.Stop()
+		o.free(o.handle)
+		o.handle = nil
+	}
+}
+
+func freeTable(p unsafe.Pointer) { C.pdfgen_table_free((*C.PdfgenTable)(p)) }
+func freeDoc(p unsafe.Pointer)   { C.pdfgen_doc_free((*C.PdfgenDoc)(p)) }
+
 // Table is a table under construction. Close it after adding it to a document.
 type Table struct {
-	handle  *C.PdfgenTable
-	cleanup runtime.Cleanup
+	s *owned
 }
 
 // NewTable creates a table with the given column widths in points and font size.
@@ -136,32 +179,32 @@ func NewTable(columnWidths []float32, fontSize float32) (*Table, error) {
 	if h == nil {
 		return nil, &Error{Code: errArg, Message: lastError()}
 	}
-	t := &Table{handle: h}
-	t.cleanup = runtime.AddCleanup(t, func(h *C.PdfgenTable) { C.pdfgen_table_free(h) }, h)
-	return t, nil
+	return &Table{s: newOwned(unsafe.Pointer(h), freeTable)}, nil
 }
 
-// Close frees the native table. It is safe to call more than once.
+// Close frees the native table. It is safe to call more than once and from several goroutines.
 func (t *Table) Close() {
-	if t.handle != nil {
-		t.cleanup.Stop()
-		C.pdfgen_table_free(t.handle)
-		t.handle = nil
+	if t != nil && t.s != nil {
+		t.s.close()
 	}
+}
+
+func (t *Table) use(f func(*C.PdfgenTable) error) error {
+	if t == nil || t.s == nil {
+		return ErrClosed
+	}
+	return t.s.use(func(p unsafe.Pointer) error { return f((*C.PdfgenTable)(p)) })
 }
 
 func (t *Table) setCells(cells []string, native func(*C.PdfgenTable, **C.char, C.size_t) C.int32_t) error {
-	if t.handle == nil {
-		return ErrClosed
-	}
-	arr, free, err := cStrings(cells)
-	if err != nil {
-		return err
-	}
-	defer free()
-	err = call(func() C.int32_t { return native(t.handle, arr, C.size_t(len(cells))) })
-	runtime.KeepAlive(t)
-	return err
+	return t.use(func(h *C.PdfgenTable) error {
+		arr, free, err := cStrings(cells)
+		if err != nil {
+			return err
+		}
+		defer free()
+		return call(func() C.int32_t { return native(h, arr, C.size_t(len(cells))) })
+	})
 }
 
 // SetHeader sets the header row, repeated on every page the table spans.
@@ -180,8 +223,7 @@ func (t *Table) AddRow(cells ...string) error {
 
 // Document is a document being built. Close it when done.
 type Document struct {
-	handle  *C.PdfgenDoc
-	cleanup runtime.Cleanup
+	s *owned
 }
 
 // NewDocument creates an empty document.
@@ -192,45 +234,40 @@ func NewDocument() (*Document, error) {
 	if h == nil {
 		return nil, &Error{Code: errCore, Message: "pdfgen_doc_new returned null"}
 	}
-	d := &Document{handle: h}
-	d.cleanup = runtime.AddCleanup(d, func(h *C.PdfgenDoc) { C.pdfgen_doc_free(h) }, h)
-	return d, nil
+	return &Document{s: newOwned(unsafe.Pointer(h), freeDoc)}, nil
 }
 
-// Close frees the native document. It is safe to call more than once.
+// Close frees the native document. It is safe to call more than once and from several goroutines.
 func (d *Document) Close() {
-	if d.handle != nil {
-		d.cleanup.Stop()
-		C.pdfgen_doc_free(d.handle)
-		d.handle = nil
+	if d != nil && d.s != nil {
+		d.s.close()
 	}
+}
+
+func (d *Document) use(f func(*C.PdfgenDoc) error) error {
+	if d == nil || d.s == nil {
+		return ErrClosed
+	}
+	return d.s.use(func(p unsafe.Pointer) error { return f((*C.PdfgenDoc)(p)) })
 }
 
 // AddText adds a wrapped paragraph. Text must be valid UTF-8 without NUL characters.
 func (d *Document) AddText(text string, font Font, size float32) error {
-	if d.handle == nil {
-		return ErrClosed
-	}
-	c, err := cString(text, "text")
-	if err != nil {
-		return err
-	}
-	defer C.free(unsafe.Pointer(c))
-	err = call(func() C.int32_t {
-		return C.pdfgen_doc_add_text(d.handle, c, C.int32_t(font), C.float(size))
+	return d.use(func(h *C.PdfgenDoc) error {
+		c, err := cString(text, "text")
+		if err != nil {
+			return err
+		}
+		defer C.free(unsafe.Pointer(c))
+		return call(func() C.int32_t { return C.pdfgen_doc_add_text(h, c, C.int32_t(font), C.float(size)) })
 	})
-	runtime.KeepAlive(d)
-	return err
 }
 
 // AddPageBreak starts a new page.
 func (d *Document) AddPageBreak() error {
-	if d.handle == nil {
-		return ErrClosed
-	}
-	err := call(func() C.int32_t { return C.pdfgen_doc_add_page_break(d.handle) })
-	runtime.KeepAlive(d)
-	return err
+	return d.use(func(h *C.PdfgenDoc) error {
+		return call(func() C.int32_t { return C.pdfgen_doc_add_page_break(h) })
+	})
 }
 
 // bytesPtr returns a pointer to the first byte of b, or nil for an empty slice.
@@ -243,54 +280,50 @@ func bytesPtr(b []byte) *C.uint8_t {
 
 // AddRawImage adds 8-bit RGB (channels 3) or gray (channels 1) pixels, drawn widthPt points wide.
 func (d *Document) AddRawImage(width, height, channels uint32, pixels []byte, widthPt float32) error {
-	if d.handle == nil {
-		return ErrClosed
-	}
-	err := call(func() C.int32_t {
-		return C.pdfgen_doc_add_image_raw(d.handle, C.uint32_t(width), C.uint32_t(height), C.uint32_t(channels),
-			bytesPtr(pixels), C.size_t(len(pixels)), C.float(widthPt))
+	return d.use(func(h *C.PdfgenDoc) error {
+		return call(func() C.int32_t {
+			return C.pdfgen_doc_add_image_raw(h, C.uint32_t(width), C.uint32_t(height), C.uint32_t(channels),
+				bytesPtr(pixels), C.size_t(len(pixels)), C.float(widthPt))
+		})
 	})
-	runtime.KeepAlive(d)
-	return err
 }
 
 // AddJPEG embeds a JPEG file unchanged, drawn widthPt points wide.
 func (d *Document) AddJPEG(jpeg []byte, widthPt float32) error {
-	if d.handle == nil {
-		return ErrClosed
-	}
-	err := call(func() C.int32_t {
-		return C.pdfgen_doc_add_image_jpeg(d.handle, bytesPtr(jpeg), C.size_t(len(jpeg)), C.float(widthPt))
+	return d.use(func(h *C.PdfgenDoc) error {
+		return call(func() C.int32_t {
+			return C.pdfgen_doc_add_image_jpeg(h, bytesPtr(jpeg), C.size_t(len(jpeg)), C.float(widthPt))
+		})
 	})
-	runtime.KeepAlive(d)
-	return err
 }
 
 // AddTable copies the table into the document; the caller still owns t.
 func (d *Document) AddTable(t *Table) error {
-	if d.handle == nil || t == nil || t.handle == nil {
-		return ErrClosed
-	}
-	err := call(func() C.int32_t { return C.pdfgen_doc_add_table(d.handle, t.handle) })
-	runtime.KeepAlive(d)
-	runtime.KeepAlive(t)
-	return err
+	// Lock order is always document, then table; nothing locks them the other way round.
+	return d.use(func(dh *C.PdfgenDoc) error {
+		return t.use(func(th *C.PdfgenTable) error {
+			return call(func() C.int32_t { return C.pdfgen_doc_add_table(dh, th) })
+		})
+	})
 }
 
 // Render lays out the document and returns the PDF bytes.
 func (d *Document) Render() ([]byte, error) {
-	if d.handle == nil {
-		return nil, ErrClosed
-	}
-	var data *C.uint8_t
-	var n C.size_t
-	err := call(func() C.int32_t { return C.pdfgen_doc_render(d.handle, &data, &n) })
-	runtime.KeepAlive(d)
+	var pdf []byte
+	err := d.use(func(h *C.PdfgenDoc) error {
+		var data *C.uint8_t
+		var n C.size_t
+		if err := call(func() C.int32_t { return C.pdfgen_doc_render(h, &data, &n) }); err != nil {
+			return err
+		}
+		defer C.pdfgen_buffer_free(data, n)
+		pdf = C.GoBytes(unsafe.Pointer(data), C.int(n))
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer C.pdfgen_buffer_free(data, n)
-	return C.GoBytes(unsafe.Pointer(data), C.int(n)), nil
+	return pdf, nil
 }
 
 // Save renders the document and writes it to path.

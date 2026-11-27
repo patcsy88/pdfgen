@@ -16,6 +16,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.testng.annotations.Test;
 
 public class PageLifecycleTest {
@@ -81,6 +84,66 @@ public class PageLifecycleTest {
         try (PdfDocument other = new PdfDocument()) {
             expectThrows(IllegalStateException.class, () -> other.addTable(t));
             expectThrows(NullPointerException.class, () -> other.addTable(null));
+        }
+    }
+
+    @Test
+    public void concurrentCloseFreesTheHandleOnce() throws Exception {
+        for (int round = 0; round < 50; round++) {
+            PdfDocument doc = new PdfDocument();
+            List<Thread> threads = new ArrayList<>();
+            for (int i = 0; i < 8; i++) {
+                Thread th = new Thread(doc::close);
+                threads.add(th);
+                th.start();
+            }
+            for (Thread th : threads) {
+                th.join();
+            }
+            expectThrows(IllegalStateException.class, doc::render);
+        }
+    }
+
+    @Test
+    public void closeDuringARenderWaitsForIt() throws Exception {
+        // The worker renders in a loop and close() starts only after its first render succeeded, so later
+        // renders are very likely in flight when close() runs; each must return a valid PDF or throw "closed".
+        String text = "lorem ipsum dolor sit amet ".repeat(20000);
+        for (int round = 0; round < 5; round++) {
+            PdfDocument doc = new PdfDocument();
+            doc.addText(text);
+            CountDownLatch started = new CountDownLatch(1);
+            AtomicReference<Throwable> problem = new AtomicReference<>();
+            Thread th = new Thread(() -> {
+                boolean first = true;
+                while (true) {
+                    byte[] pdf;
+                    try {
+                        pdf = doc.render();
+                    } catch (IllegalStateException e) { // closed: the only acceptable way to stop
+                        return;
+                    } catch (Throwable e) {
+                        problem.set(e);
+                        started.countDown();
+                        return;
+                    }
+                    String head = new String(pdf, 0, 8, java.nio.charset.StandardCharsets.ISO_8859_1);
+                    if (!head.equals("%PDF-2.0")) {
+                        problem.set(new AssertionError("header " + head));
+                        started.countDown();
+                        return;
+                    }
+                    if (first) {
+                        first = false;
+                        started.countDown();
+                    }
+                }
+            });
+            th.start();
+            assertTrue(started.await(60, TimeUnit.SECONDS), "the first render never finished");
+            doc.close();
+            th.join();
+            assertEquals(problem.get(), null);
         }
     }
 

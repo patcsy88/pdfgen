@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes as C
 import enum
 import os
+import threading
 import weakref
 from collections.abc import Iterable
 
@@ -73,25 +75,43 @@ def _buffer(data: bytes | bytearray | memoryview, name: str) -> bytes:
 
 
 class _Handle:
-    """Owns one native handle; the finalizer frees it if `close()` is never called."""
+    """Owns one native handle; the finalizer frees it if `close()` is never called.
+
+    Every native call runs inside `_use()`, which holds the handle's lock, so `close()` from another
+    thread waits for an in-flight call instead of freeing the handle under it. Copying is refused: a copy
+    would share the raw handle, and closing either one would free memory the other still uses.
+    """
 
     _free = None  # set by subclasses: the matching *_free function
     _what = ""
 
     def __init__(self, handle: int) -> None:
         self._handle: int | None = handle
+        self._lock = threading.Lock()
         self._finalizer = weakref.finalize(self, type(self)._free, handle)
 
-    @property
-    def _h(self) -> int:
-        if self._handle is None:
-            raise ValueError(f"{self._what} is closed")
-        return self._handle
+    @contextlib.contextmanager
+    def _use(self):
+        """Yields the live handle with the lock held; raises ValueError once closed."""
+        with self._lock:
+            if self._handle is None:
+                raise ValueError(f"{self._what} is closed")
+            yield self._handle
 
     def close(self) -> None:
-        """Frees the native object. Safe to call more than once."""
-        self._handle = None
-        self._finalizer()
+        """Frees the native object. Safe to call more than once, from any thread."""
+        with self._lock:
+            self._handle = None
+            self._finalizer()
+
+    def __copy__(self):
+        raise TypeError(f"{self._what} owns a native handle and cannot be copied")
+
+    def __deepcopy__(self, memo):
+        raise TypeError(f"{self._what} owns a native handle and cannot be copied")
+
+    def __reduce__(self):
+        raise TypeError(f"{self._what} owns a native handle and cannot be pickled")
 
     def __enter__(self):
         return self
@@ -116,12 +136,14 @@ class PdfTable(_Handle):
 
     def set_header(self, *cells: str) -> PdfTable:
         arr, n = _cells(cells)
-        _check(_n.table_set_header(self._h, arr, n))
+        with self._use() as h:
+            _check(_n.table_set_header(h, arr, n))
         return self
 
     def add_row(self, *cells: str) -> PdfTable:
         arr, n = _cells(cells)
-        _check(_n.table_add_row(self._h, arr, n))
+        with self._use() as h:
+            _check(_n.table_add_row(h, arr, n))
         return self
 
 
@@ -141,11 +163,13 @@ class PdfDocument(_Handle):
         code = int(font)
         if not -(2**31) <= code < 2**31:
             raise ValueError("font code does not fit in a C int")
-        _check(_n.doc_add_text(self._h, _utf8(text, "text"), code, size))
+        with self._use() as h:
+            _check(_n.doc_add_text(h, _utf8(text, "text"), code, size))
         return self
 
     def add_page_break(self) -> PdfDocument:
-        _check(_n.doc_add_page_break(self._h))
+        with self._use() as h:
+            _check(_n.doc_add_page_break(h))
         return self
 
     def add_raw_image(
@@ -153,36 +177,41 @@ class PdfDocument(_Handle):
     ) -> PdfDocument:
         """Adds 8-bit RGB (`channels` = 3) or gray (1) pixels, drawn `width_pt` points wide."""
         data = _buffer(pixels, "pixels")
-        _check(
-            _n.doc_add_image_raw(
-                self._h,
-                _uint32(width, "width"),
-                _uint32(height, "height"),
-                _uint32(channels, "channels"),
-                data,
-                len(data),
-                width_pt,
+        with self._use() as h:
+            _check(
+                _n.doc_add_image_raw(
+                    h,
+                    _uint32(width, "width"),
+                    _uint32(height, "height"),
+                    _uint32(channels, "channels"),
+                    data,
+                    len(data),
+                    width_pt,
+                )
             )
-        )
         return self
 
     def add_jpeg(self, jpeg: bytes | bytearray | memoryview, width_pt: float) -> PdfDocument:
         data = _buffer(jpeg, "jpeg")
-        _check(_n.doc_add_image_jpeg(self._h, data, len(data), width_pt))
+        with self._use() as h:
+            _check(_n.doc_add_image_jpeg(h, data, len(data), width_pt))
         return self
 
     def add_table(self, table: PdfTable) -> PdfDocument:
         """Copies the table into the document; the caller still owns `table`."""
         if not isinstance(table, PdfTable):
             raise TypeError(f"table must be PdfTable, not {type(table).__name__}")
-        _check(_n.doc_add_table(self._h, table._h))
+        # Lock order is always document, then table; nothing locks them the other way round.
+        with self._use() as h, table._use() as th:
+            _check(_n.doc_add_table(h, th))
         return self
 
     def render(self) -> bytes:
         """Lays out the document and returns the PDF bytes."""
         data = C.c_void_p()
         length = C.c_size_t()
-        _check(_n.doc_render(self._h, C.byref(data), C.byref(length)))
+        with self._use() as h:
+            _check(_n.doc_render(h, C.byref(data), C.byref(length)))
         try:
             return C.string_at(data.value, length.value)
         finally:

@@ -145,6 +145,45 @@ public class PdfTests
     }
 
     [Fact]
+    public void ConcurrentDisposeFreesTheHandleOnce()
+    {
+        for (int round = 0; round < 50; round++)
+        {
+            var doc = new PdfDocument();
+            Parallel.For(0, 8, _ => doc.Dispose());
+            Assert.Throws<ObjectDisposedException>(() => doc.Render());
+        }
+    }
+
+    [Fact]
+    public async Task DisposeDuringARenderWaitsForIt()
+    {
+        // The worker renders in a loop and Dispose starts only after its first render succeeded, so later
+        // renders are very likely in flight when Dispose runs; each must return a valid PDF or throw disposed.
+        var text = string.Concat(Enumerable.Repeat("lorem ipsum dolor sit amet ", 20000));
+        for (int round = 0; round < 5; round++)
+        {
+            var doc = new PdfDocument().AddText(text);
+            var first = new TaskCompletionSource();
+            var worker = Task.Run(() =>
+            {
+                while (true)
+                {
+                    byte[] pdf;
+                    try { pdf = doc.Render(); }
+                    catch (ObjectDisposedException) { return; } // the only acceptable way to stop
+                    Assert.StartsWith("%PDF-2.0", Encoding.ASCII.GetString(pdf, 0, 8));
+                    first.TrySetResult();
+                }
+            });
+            await Task.WhenAny(first.Task, worker);
+            Assert.True(first.Task.IsCompleted, "the worker stopped before its first render finished");
+            doc.Dispose();
+            await worker;
+        }
+    }
+
+    [Fact]
     public async Task ManyDocumentsOnManyThreads()
     {
         var tasks = Enumerable.Range(0, 8).Select(t => Task.Run(() =>
