@@ -442,7 +442,7 @@ fn jpeg_header(w: u16, h: u16, comps: u8) -> Vec<u8> {
     for c in 0..comps {
         v.extend_from_slice(&[c + 1, 0x11, 0]);
     }
-    v.extend_from_slice(&[0xFF, 0xD9]);
+    v.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
     v
 }
 
@@ -510,7 +510,7 @@ fn jpeg_frames(markers: &[u8]) -> Vec<u8> {
     for m in markers {
         v.extend_from_slice(&[0xFF, *m, 0x00, 0x0B, 8, 0x00, 0x10, 0x00, 0x10, 0x01, 0x01, 0x11, 0x00]);
     }
-    v.extend_from_slice(&[0xFF, 0xD9]);
+    v.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
     v
 }
 
@@ -530,6 +530,28 @@ fn jpeg_with_decoy_or_unsupported_frames_is_rejected() {
     let mut with_dht = vec![0xFF, 0xD8, 0xFF, 0xC4, 0x00, 0x03, 0x00];
     with_dht.extend_from_slice(&jpeg_frames(&[0xC0])[2..]);
     assert!(Image::jpeg(with_dht).is_ok());
+}
+
+#[test]
+fn jpeg_structure_is_validated() {
+    // A 20-byte header must not be able to declare a multi-gigapixel frame.
+    assert!(matches!(Image::jpeg(jpeg_header(65535, 65535, 3)), Err(Error::BadJpeg(m)) if m.contains("pixel limit")));
+    assert!(Image::jpeg(jpeg_header(4000, 4000, 3)).is_ok());
+    // SOF length must be 8 + 3 * components.
+    let mut bad_len = jpeg_header(16, 16, 3);
+    bad_len[5] += 3;
+    assert!(matches!(Image::jpeg(bad_len), Err(Error::BadJpeg(_))));
+    // A frame header with no SOS after it is not a decodable image.
+    let mut no_sos = jpeg_frames(&[0xC0]);
+    no_sos.drain(no_sos.len() - 6..no_sos.len() - 2);
+    assert!(matches!(Image::jpeg(no_sos), Err(Error::BadJpeg(m)) if m.contains("SOS")));
+    // A segment shorter than its own length field, or a frame header after EOI, hides a decoy SOF.
+    let mut short_seg = vec![0xFF, 0xD8, 0xFF, 0xFE, 0x00, 0x01];
+    short_seg.extend_from_slice(&jpeg_frames(&[0xC0])[2..]);
+    assert!(matches!(Image::jpeg(short_seg), Err(Error::BadJpeg(_))));
+    let mut after_eoi = vec![0xFF, 0xD8, 0xFF, 0xD9];
+    after_eoi.extend_from_slice(&jpeg_frames(&[0xC0])[2..]);
+    assert!(matches!(Image::jpeg(after_eoi), Err(Error::BadJpeg(_))));
 }
 
 #[test]

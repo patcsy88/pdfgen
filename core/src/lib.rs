@@ -182,12 +182,17 @@ fn check_len(w: u32, h: u32, ch: usize, len: usize) -> Result<(), Error> {
     Ok(())
 }
 
+/// Largest frame a JPEG header may declare. The stream is embedded unchanged, so the declared size is what a
+/// viewer allocates for; a 16-bit header alone can claim 65535 x 65535.
+const MAX_JPEG_PIXELS: u64 = 100_000_000;
+
 fn parse_jpeg(b: &[u8]) -> Result<(u32, u32, u8), Error> {
     if b.len() < 4 || b[0] != 0xFF || b[1] != 0xD8 {
         return Err(Error::BadJpeg("missing SOI marker".into()));
     }
     let mut i = 2;
     let mut frame = None;
+    let mut sos = false;
     while i + 4 <= b.len() {
         if b[i] != 0xFF {
             return Err(Error::BadJpeg("expected marker".into()));
@@ -197,11 +202,23 @@ fn parse_jpeg(b: &[u8]) -> Result<(u32, u32, u8), Error> {
             i += 1;
             continue;
         }
+        // EOI before SOS: nothing after it is image data, so a frame header past it would be a decoy.
+        if m == 0xD9 {
+            break;
+        }
         if m == 0xD8 || m == 0x01 || (0xD0..=0xD7).contains(&m) {
             i += 2;
             continue;
         }
         let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+        // The length counts its own two bytes. A smaller value would make the scan below re-read the segment's
+        // own bytes as markers, which a real decoder does not.
+        if len < 2 {
+            return Err(Error::BadJpeg("segment length below 2".into()));
+        }
+        if i + 2 + len > b.len() {
+            return Err(Error::BadJpeg("truncated segment".into()));
+        }
         // SOF0-SOF15 minus DHT (C4), JPG (C8) and DAC (CC). A decoder uses one frame header, so a second one,
         // or one for a coding process this code does not describe, would let a decoy frame pass the checks below.
         if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
@@ -213,7 +230,7 @@ fn parse_jpeg(b: &[u8]) -> Result<(u32, u32, u8), Error> {
                     "SOF marker 0x{m:02X} unsupported, only baseline and progressive Huffman (SOF0-SOF2)"
                 )));
             }
-            if i + 9 + 1 > b.len() || len < 8 {
+            if len < 8 {
                 return Err(Error::BadJpeg("truncated SOF".into()));
             }
             let p = b[i + 4];
@@ -223,16 +240,29 @@ fn parse_jpeg(b: &[u8]) -> Result<(u32, u32, u8), Error> {
             let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as u32;
             let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as u32;
             let n = b[i + 9];
+            if len != 8 + 3 * n as usize {
+                return Err(Error::BadJpeg(format!("SOF length {len} does not match {n} components")));
+            }
             if w == 0 || h == 0 {
                 return Err(Error::BadJpeg("zero dimension".into()));
             }
+            if w as u64 * h as u64 > MAX_JPEG_PIXELS {
+                return Err(Error::BadJpeg(format!(
+                    "{w}x{h} exceeds the {MAX_JPEG_PIXELS} pixel limit"
+                )));
+            }
             frame = Some((w, h, n));
         } else if m == 0xDA {
+            sos = true;
             break;
         }
         i += 2 + len;
     }
-    frame.ok_or_else(|| Error::BadJpeg("no SOF0-SOF2 marker found".into()))
+    let frame = frame.ok_or_else(|| Error::BadJpeg("no SOF0-SOF2 marker found".into()))?;
+    if !sos {
+        return Err(Error::BadJpeg("no SOS marker before end of image".into()));
+    }
+    Ok(frame)
 }
 
 #[derive(Debug, Clone)]
@@ -517,18 +547,12 @@ impl<'a> Layout<'a> {
         if self.y - h < MARGIN && !self.at_top() {
             self.new_page()?;
         }
-        let idx = match self.images.iter().position(|i| std::ptr::eq(*i, img)) {
-            Some(i) => i,
-            None => {
-                self.images.push(img);
-                self.images.len() - 1
-            }
-        };
+        // Every block owns its own `Image`, so a pointer-identity lookup never hits: one XObject per block.
+        self.images.push(img);
+        let idx = self.images.len() - 1;
         let y = self.y - h;
         let page = self.cur();
-        if !page.images.contains(&idx) {
-            page.images.push(idx);
-        }
+        page.images.push(idx);
         page.content.extend_from_slice(
             format!("q {:.2} 0 0 {:.2} {:.2} {:.2} cm /Im{} Do Q\n", w, h, MARGIN, y, idx + 1).as_bytes(),
         );
