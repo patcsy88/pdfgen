@@ -242,7 +242,7 @@ fn non_finite_or_out_of_range_dimensions_are_rejected_not_written() {
         d.render()
     };
     let max_text = (842.0 - 2.0 * 50.0) / 1.2; // (PAGE_H - 2 * MARGIN) / LEADING: one line fills the text area
-    for size in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.0, -1.0, 618.4, 1000.0, 1e30, f32::MAX] {
+    for size in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.0, -1.0, 0.5, 1e-30, 618.4, 1000.0, 1e30, f32::MAX] {
         assert!(matches!(bad_text(size), Err(Error::BadDimension(_))), "text size {size}");
     }
     for (widths, size) in [
@@ -254,6 +254,7 @@ fn non_finite_or_out_of_range_dimensions_are_rejected_not_written() {
         (vec![20000.0, 20000.0], 10.0),
         (vec![50.0], f32::NAN),
         (vec![50.0], -0.0),
+        (vec![50.0], 0.5),
     ] {
         let mut d = Document::new();
         d.add_table(table(widths.clone(), size));
@@ -267,11 +268,92 @@ fn non_finite_or_out_of_range_dimensions_are_rejected_not_written() {
 
     // The limits themselves are accepted and still conformant.
     let mut d = Document::new();
-    d.add_text("big", Font::Helvetica, max_text).add_text("tiny", Font::Courier, 1e-3);
+    d.add_text("big", Font::Helvetica, max_text).add_text("tiny", Font::Courier, 1.0);
     d.add_table(table(vec![32000.0], 1.0));
     d.add_table(table(vec![8.5], 1.0));
     d.add_image(Image::gray(2, 2, vec![0, 1, 2, 3]).unwrap(), 1e30);
     write_and_check("dimension_limits.pdf", &d);
+}
+
+/// Renders `d` and returns the result with the time it took, in seconds.
+fn timed_render(d: &Document) -> (Result<Vec<u8>, Error>, f64) {
+    let start = std::time::Instant::now();
+    let r = d.render();
+    (r, start.elapsed().as_secs_f64())
+}
+
+#[test]
+fn font_sizes_below_one_point_are_rejected() {
+    // With no lower bound a size such as 1e-30 put a whole input on one line, which made wrapping quadratic
+    // in the input length.
+    for size in [0.999, 0.5, 1e-30, f32::MIN_POSITIVE] {
+        let mut d = Document::new();
+        d.add_text("x", Font::Helvetica, size);
+        assert!(matches!(d.render(), Err(Error::BadDimension(m)) if m.contains("text size")), "text size {size}");
+        let mut d = Document::new();
+        d.add_table(Table { column_widths: vec![50.0], header: None, rows: vec![vec!["a".into()]], font_size: size });
+        assert!(matches!(d.render(), Err(Error::BadDimension(m)) if m.contains("table font size")), "table font size {size}");
+    }
+    let mut d = Document::new();
+    d.add_text("one point", Font::Helvetica, 1.0);
+    d.add_table(Table { column_widths: vec![50.0], header: Some(vec!["h".into()]), rows: vec![vec!["a".into()]], font_size: 1.0 });
+    write_and_check("min_font_size.pdf", &d);
+}
+
+#[test]
+fn long_lines_wrap_in_linear_time() {
+    // wrap() used to measure the whole line again for every word, and the whole fragment again for every
+    // character of a hard-broken word: quadratic in the line length. A small size or a wide column makes a
+    // line long. Debug build, old code: 11.7 s, 30.4 s, 13.8 s and 13.7 s for these four documents; new code
+    // takes well under 1 s for each.
+    let text = |s: String| Block::Text { text: s, font: Font::Helvetica, size: 1.0 };
+    let cell = |s: String| Block::Table(Table { column_widths: vec![32000.0], header: None, rows: vec![vec![s]], font_size: 1.0 });
+    let docs = [
+        ("words", text("i ".repeat(500_000))),
+        ("hard break", text("'".repeat(1_000_000))),
+        ("cell words", cell("aa ".repeat(20_000))),
+        ("cell hard break", cell("W".repeat(40_000))),
+    ];
+    for (what, block) in docs {
+        let mut d = Document::new();
+        d.add(block);
+        let (r, secs) = timed_render(&d);
+        assert!(r.is_ok(), "{what}: {r:?}");
+        assert!(secs < 5.0, "{what}: wrapping took {secs:.1} s");
+    }
+}
+
+#[test]
+fn page_count_is_capped_at_10000() {
+    // A 618pt line fills a page's text area, so n newlines give n + 1 one-line pages. 100 KB of newlines used
+    // to give 100 001 pages.
+    let mut d = Document::new();
+    d.add_text(&"\n".repeat(9_999), Font::Helvetica, 618.0);
+    let bytes = d.render().unwrap();
+    assert!(contains(&bytes, "/Count 10000 >>"), "expected exactly 10000 pages");
+    let mut d = Document::new();
+    d.add_text(&"\n".repeat(10_000), Font::Helvetica, 618.0);
+    assert!(matches!(d.render(), Err(Error::TooLarge(m)) if m.contains("10000 pages")));
+
+    let mut d = Document::new();
+    for _ in 0..9_999 {
+        d.add_page_break();
+    }
+    assert!(contains(&d.render().unwrap(), "/Count 10000 >>"));
+    d.add_page_break();
+    assert!(matches!(d.render(), Err(Error::TooLarge(m)) if m.contains("10000 pages")));
+}
+
+#[test]
+fn page_content_is_capped() {
+    // 4000 columns of 8.01pt and 8000 empty rows, about 16 KB of input: every row strokes 4000 cell borders,
+    // about 150 KB of content. Old code laid out all 8000 rows (about 1.2 GB of content streams; 2.7 GB RSS
+    // and 68 s in a release build). Now layout stops once the content passes 256 MiB, after about 1800 rows.
+    let mut d = Document::new();
+    d.add_table(Table { column_widths: vec![8.01; 4000], header: None, rows: vec![vec![]; 8000], font_size: 1.0 });
+    let (r, secs) = timed_render(&d);
+    assert!(matches!(&r, Err(Error::TooLarge(m)) if m.contains("bytes")), "{:?}", r.map(|b| b.len()));
+    assert!(secs < 20.0, "took {secs:.1} s");
 }
 
 #[test]

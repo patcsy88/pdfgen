@@ -243,6 +243,7 @@ fn random_documents_render_to_valid_pdfs_or_documented_errors() {
                     Error::BadDimension(_) => "BadDimension",
                     Error::BadImageData(_) => "BadImageData",
                     Error::BadJpeg(_) => "BadJpeg",
+                    Error::TooLarge(_) => "TooLarge",
                 }).or_default() += 1;
             }
             Ok(Ok(bytes)) => {

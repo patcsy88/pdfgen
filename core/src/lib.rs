@@ -24,6 +24,13 @@ const MAX_FONT_SIZE: f32 = 1000.0;
 const MAX_TEXT_SIZE: f32 = (PAGE_H - 2.0 * MARGIN) / LEADING;
 /// Largest x coordinate `render` lets a table reach.
 const MAX_COORD: f32 = 32767.0;
+/// Smallest text or table font size `render` accepts. Without a lower bound a tiny size puts a whole input
+/// on one line, and the per-line work (and the page count a tall line needs) is no longer bounded by the input.
+const MIN_FONT_SIZE: f32 = 1.0;
+/// Most pages `render` lays out before failing with [`Error::TooLarge`].
+const MAX_PAGES: usize = 10_000;
+/// Most uncompressed page-content bytes `render` lays out before failing with [`Error::TooLarge`].
+const MAX_CONTENT_BYTES: usize = 256 << 20;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -38,6 +45,9 @@ pub enum Error {
     /// A font size, column width or image width is NaN, infinite, not positive, or above its limit, or a
     /// column width leaves no room inside its cell padding.
     BadDimension(String),
+    /// The document would exceed `MAX_PAGES` (10 000) pages or `MAX_CONTENT_BYTES` (256 MiB) bytes of
+    /// uncompressed page content.
+    TooLarge(String),
 }
 
 impl fmt::Display for Error {
@@ -48,6 +58,7 @@ impl fmt::Display for Error {
             Error::BadTable(m) => write!(f, "bad table: {m}"),
             Error::RowTooTall => write!(f, "table row taller than a page (together with the header)"),
             Error::BadDimension(m) => write!(f, "bad dimension: {m}"),
+            Error::TooLarge(m) => write!(f, "document too large: {m}"),
         }
     }
 }
@@ -265,47 +276,53 @@ impl Document {
 
     /// Lay out all blocks and serialise a PDF 2.0 file.
     ///
-    /// Fails with [`Error::BadDimension`] before any layout if a text size is not in `(0, 618.33]` (one line
-    /// as tall as the page's text area), a table font size is not in `(0, 1000]`, a column width is not
+    /// Fails with [`Error::BadDimension`] before any layout if a text size is not in `[1, 618.33]` (one line
+    /// as tall as the page's text area), a table font size is not in `[1, 1000]`, a column width is not
     /// finite and above 8 (twice the cell padding), the columns together reach beyond x = 32767,
     /// or an image width is not positive and finite. An image wider than the text area is scaled down.
     ///
     /// Fails with [`Error::RowTooTall`] if a table row, together with the table's header if it has one,
     /// is taller than a page.
+    ///
+    /// Fails with [`Error::TooLarge`] if the layout needs more than 10 000 pages or more than 256 MiB of
+    /// uncompressed page content; layout stops as soon as a limit is passed.
     pub fn render(&self) -> Result<Vec<u8>, Error> {
         for b in &self.blocks {
             match b {
-                Block::Text { size, .. } => check_dim("text size", *size, MAX_TEXT_SIZE)?,
+                Block::Text { size, .. } => check_dim("text size", *size, MIN_FONT_SIZE, MAX_TEXT_SIZE)?,
                 Block::Table(t) => check_table_dims(t)?,
-                Block::Image { width, .. } => check_dim("image width", *width, f32::MAX)?,
+                Block::Image { width, .. } => check_dim("image width", *width, 0.0, f32::MAX)?,
                 Block::PageBreak => {}
             }
         }
         let mut lay = Layout::new();
         for b in &self.blocks {
             match b {
-                Block::Text { text, font, size } => lay.text(text, *font, *size),
+                Block::Text { text, font, size } => lay.text(text, *font, *size)?,
                 Block::Table(t) => lay.table(t)?,
-                Block::Image { image, width } => lay.image(image, *width),
-                Block::PageBreak => lay.new_page(),
+                Block::Image { image, width } => lay.image(image, *width)?,
+                Block::PageBreak => lay.new_page()?,
             }
         }
         Ok(lay.finish())
     }
 }
 
-fn check_dim(what: &str, v: f32, max: f32) -> Result<(), Error> {
-    if v.is_finite() && v > 0.0 && v <= max {
+/// `v` must be finite, positive, at least `min` and at most `max`.
+fn check_dim(what: &str, v: f32, min: f32, max: f32) -> Result<(), Error> {
+    if v.is_finite() && v > 0.0 && v >= min && v <= max {
         Ok(())
+    } else if min > 0.0 {
+        Err(Error::BadDimension(format!("{what} must be at least {min} and at most {max}, got {v}")))
     } else {
         Err(Error::BadDimension(format!("{what} must be greater than 0 and at most {max}, got {v}")))
     }
 }
 
 fn check_table_dims(t: &Table) -> Result<(), Error> {
-    check_dim("table font size", t.font_size, MAX_FONT_SIZE)?;
+    check_dim("table font size", t.font_size, MIN_FONT_SIZE, MAX_FONT_SIZE)?;
     for w in &t.column_widths {
-        check_dim("column width", *w, MAX_COORD)?;
+        check_dim("column width", *w, 0.0, MAX_COORD)?;
         if *w <= 2.0 * CELL_PAD {
             return Err(Error::BadDimension(format!("column width must be above {}, got {w}", 2.0 * CELL_PAD)));
         }
@@ -338,6 +355,8 @@ struct PageBuf {
 
 struct Layout<'a> {
     pages: Vec<PageBuf>,
+    /// Content bytes of every page but the last.
+    done_bytes: usize,
     y: f32,
     images: Vec<&'a Image>,
 }
@@ -346,6 +365,7 @@ impl<'a> Layout<'a> {
     fn new() -> Self {
         Layout {
             pages: vec![PageBuf { content: Vec::new(), images: Vec::new() }],
+            done_bytes: 0,
             y: PAGE_H - MARGIN,
             images: Vec::new(),
         }
@@ -355,9 +375,23 @@ impl<'a> Layout<'a> {
         self.y >= PAGE_H - MARGIN - 0.01
     }
 
-    fn new_page(&mut self) {
+    fn new_page(&mut self) -> Result<(), Error> {
+        if self.pages.len() >= MAX_PAGES {
+            return Err(Error::TooLarge(format!("more than {MAX_PAGES} pages")));
+        }
+        self.done_bytes += self.cur().content.len();
         self.pages.push(PageBuf { content: Vec::new(), images: Vec::new() });
         self.y = PAGE_H - MARGIN;
+        Ok(())
+    }
+
+    /// Fails once the page content written so far passes `MAX_CONTENT_BYTES`.
+    fn check_size(&self) -> Result<(), Error> {
+        let total = self.done_bytes + self.pages.last().map_or(0, |p| p.content.len());
+        if total > MAX_CONTENT_BYTES {
+            return Err(Error::TooLarge(format!("page content exceeds {MAX_CONTENT_BYTES} bytes")));
+        }
+        Ok(())
     }
 
     fn cur(&mut self) -> &mut PageBuf {
@@ -383,17 +417,19 @@ impl<'a> Layout<'a> {
         c.extend_from_slice(b") Tj ET\n");
     }
 
-    fn text(&mut self, text: &str, font: Font, size: f32) {
+    fn text(&mut self, text: &str, font: Font, size: f32) -> Result<(), Error> {
         let lh = size * LEADING;
         for line in wrap(text, font, size, PAGE_W - 2.0 * MARGIN) {
             if self.y - lh < MARGIN && !self.at_top() {
-                self.new_page();
+                self.new_page()?;
             }
             self.y -= lh;
             let y = self.y + size * 0.2;
             self.put_text(MARGIN, y, font, size, &line);
+            self.check_size()?;
         }
         self.y -= size * 0.4; // paragraph gap
+        Ok(())
     }
 
     fn table(&mut self, t: &Table) -> Result<(), Error> {
@@ -416,9 +452,9 @@ impl<'a> Layout<'a> {
         let rows = t.rows.iter().map(|r| layout_row(r, false, t));
         if let Some((cells, h)) = &header {
             if self.y - h < MARGIN && !self.at_top() {
-                self.new_page();
+                self.new_page()?;
             }
-            self.draw_row(cells, Font::HelveticaBold, size, *h, &t.column_widths, true);
+            self.draw_row(cells, Font::HelveticaBold, size, *h, &t.column_widths, true)?;
         }
         for (cells, h) in rows {
             // A row that cannot fit under the header repeated on a fresh page can never be placed.
@@ -426,18 +462,18 @@ impl<'a> Layout<'a> {
                 return Err(Error::RowTooTall);
             }
             if self.y - h < MARGIN && !self.at_top() {
-                self.new_page();
+                self.new_page()?;
                 if let Some((hc, hh)) = &header {
-                    self.draw_row(hc, Font::HelveticaBold, size, *hh, &t.column_widths, true);
+                    self.draw_row(hc, Font::HelveticaBold, size, *hh, &t.column_widths, true)?;
                 }
             }
-            self.draw_row(&cells, Font::Helvetica, size, h, &t.column_widths, false);
+            self.draw_row(&cells, Font::Helvetica, size, h, &t.column_widths, false)?;
         }
         self.y -= size * 0.6;
         Ok(())
     }
 
-    fn draw_row(&mut self, cells: &[Vec<String>], font: Font, size: f32, h: f32, widths: &[f32], shade: bool) {
+    fn draw_row(&mut self, cells: &[Vec<String>], font: Font, size: f32, h: f32, widths: &[f32], shade: bool) -> Result<(), Error> {
         let top = self.y;
         let lh = size * LEADING;
         let mut x = MARGIN;
@@ -453,11 +489,13 @@ impl<'a> Layout<'a> {
                 self.put_text(x + CELL_PAD, y, font, size, line);
             }
             x += w;
+            self.check_size()?;
         }
         self.y = top - h;
+        Ok(())
     }
 
-    fn image(&mut self, img: &'a Image, width: f32) {
+    fn image(&mut self, img: &'a Image, width: f32) -> Result<(), Error> {
         let max_h = PAGE_H - 2.0 * MARGIN;
         let max_w = PAGE_W - 2.0 * MARGIN;
         let mut w = width.min(max_w);
@@ -467,7 +505,7 @@ impl<'a> Layout<'a> {
             w = h * img.width as f32 / img.height as f32;
         }
         if self.y - h < MARGIN && !self.at_top() {
-            self.new_page();
+            self.new_page()?;
         }
         let idx = match self.images.iter().position(|i| std::ptr::eq(*i, img)) {
             Some(i) => i,
@@ -485,6 +523,7 @@ impl<'a> Layout<'a> {
             format!("q {:.2} 0 0 {:.2} {:.2} {:.2} cm /Im{} Do Q\n", w, h, MARGIN, y, idx + 1).as_bytes(),
         );
         self.y = y - 8.0;
+        self.check_size()
     }
 
     fn finish(self) -> Vec<u8> {
@@ -564,29 +603,42 @@ fn deflate(data: &[u8]) -> Vec<u8> {
 }
 
 /// Greedy word wrap; hard-breaks words wider than `max_w`. Always returns >= 1 line.
+///
+/// Widths are tracked as running sums of per-character advances, so the cost is linear in `text`.
 fn wrap(text: &str, font: Font, size: f32, max_w: f32) -> Vec<String> {
+    let fits = |units: u64| units as f32 * size / 1000.0 <= max_w;
+    let space = font.char_width(' ') as u64;
     let mut out = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
+        let mut line_units = 0u64;
         for word in para.split(|c: char| c.is_whitespace() && c != '\u{a0}').filter(|w| !w.is_empty()) {
-            let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if font.text_width(&cand, size) <= max_w {
-                line = cand;
+            let word_units: u64 = word.chars().map(|c| font.char_width(c) as u64).sum();
+            let cand_units = if line.is_empty() { word_units } else { line_units + space + word_units };
+            if fits(cand_units) {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                line_units = cand_units;
                 continue;
             }
             if !line.is_empty() {
                 out.push(std::mem::take(&mut line));
             }
             let mut cur = String::new();
+            let mut cur_units = 0u64;
             for ch in word.chars() {
-                let mut t = cur.clone();
-                t.push(ch);
-                if !cur.is_empty() && font.text_width(&t, size) > max_w {
+                let cw = font.char_width(ch) as u64;
+                if !cur.is_empty() && !fits(cur_units + cw) {
                     out.push(std::mem::take(&mut cur));
+                    cur_units = 0;
                 }
                 cur.push(ch);
+                cur_units += cw;
             }
             line = cur;
+            line_units = cur_units;
         }
         out.push(line);
     }
