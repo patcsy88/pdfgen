@@ -4,7 +4,7 @@ Guidance for AI agents working in this repository. Human docs are in `README.md`
 
 ## Project
 
-pdfgen: a small PDF 2.0 report generator. A Rust core (`core/`) sits behind a hand-written C ABI (`ffi/`) with wrappers for .NET, Node.js, Python, Java and Go. Version 0.1.0. Nothing is published to a package registry.
+pdfgen: a small PDF 2.0 report generator. A Rust core (`core/`) sits behind a hand-written C ABI (`ffi/`) with wrappers for .NET, Node.js, Python, Java and Go. Version 0.1.1. Nothing is published to a package registry.
 
 ## Commands
 
