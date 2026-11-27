@@ -1,0 +1,59 @@
+Third-party notices for the .NET test project (dotnet/PdfGen.Tests)
+====================================================================
+
+The PdfGen library (dotnet/PdfGen) has no third-party dependencies. The 13 NuGet
+packages below are restored only to build and run the tests; none is part of the
+library or is shipped with it. Versions are the ones in dotnet/PdfGen.Tests/PdfGen.Tests.csproj
+and its resolved dependency tree. The license is the one each package declares in its
+.nuspec, except where noted.
+
+MIT
+---
+Microsoft.NET.Test.Sdk                   17.14.1   (c) Microsoft Corporation
+Microsoft.CodeCoverage                   17.14.1   (c) Microsoft Corporation
+Microsoft.TestPlatform.ObjectModel       17.14.1   (c) Microsoft Corporation
+Microsoft.TestPlatform.TestHost          17.14.1   (c) Microsoft Corporation
+Newtonsoft.Json                          13.0.3    Copyright (c) James Newton-King 2008
+
+Apache-2.0
+----------
+xunit                                    2.9.3     Copyright (C) .NET Foundation
+xunit.analyzers                          1.18.0    Copyright (C) .NET Foundation
+xunit.assert                             2.9.3     Copyright (C) .NET Foundation
+xunit.core                               2.9.3     Copyright (C) .NET Foundation
+xunit.extensibility.core                 2.9.3     Copyright (C) .NET Foundation
+xunit.extensibility.execution            2.9.3     Copyright (C) .NET Foundation
+xunit.runner.visualstudio                3.1.4     Copyright (C) .NET Foundation
+xunit.abstractions                       2.0.3     Copyright (C) Outercurve Foundation (see below)
+
+xunit.abstractions 2.0.3
+------------------------
+Licensed under the Apache License, Version 2.0.
+    https://www.apache.org/licenses/LICENSE-2.0
+
+This package declares no SPDX license expression, contains no license file, and its
+nuget.org entry has only a licenseUrl
+(https://raw.githubusercontent.com/xunit/xunit/master/license.txt). The Apache-2.0
+classification rests on:
+  - that URL, which is the xunit project's license file: Apache-2.0, "Copyright (c)
+    .NET Foundation and Contributors";
+  - license.txt in the package's source repository (github.com/xunit/abstractions.xunit),
+    which is Apache-2.0 with the same copyright line. That file is not present in the
+    repository at the commit the 2.0.3 tag points to (489a2b3), which holds only the
+    source and build files, so the grant at the release itself is by reference to the
+    URL above;
+  - the README of that repository, which states the project is licensed under Apache 2.
+The copyright attribute inside the 2.0.3 assemblies reads "Copyright (C) Outercurve
+Foundation"; the .nuspec carries no copyright element.
+
+The MIT-licensed notice in the xunit project's license.txt (for code imported from
+dotnet/core-setup: Microsoft.DotNet.PlatformAbstractions and
+Microsoft.Extensions.DependencyModel) does not apply to this package: the source
+repository at 489a2b3 has no such files, and the assemblies contain none of those names.
+
+License texts
+-------------
+This file does not reproduce the license texts. Apache-2.0:
+https://www.apache.org/licenses/LICENSE-2.0. MIT: https://opensource.org/license/mit.
+Anyone redistributing the test packages themselves, rather than restoring them from
+NuGet, is responsible for including the license text with them.

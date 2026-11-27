@@ -71,7 +71,7 @@ jobs:
       - run: npm ci && npm test
         working-directory: node
       - run: PDFGEN_CHECK_DIR=node/test-output cargo test -p pdfgen-core --test external_pdfs --locked
-      - run: npm run license-check && npm run license-check:all
+      - run: npm run license-check
         working-directory: node
 
   python:

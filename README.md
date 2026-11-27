@@ -69,8 +69,8 @@ cd node && npm ci && npm test           # writes node/test-output/*.pdf
 # Arlington + content-stream checks over those PDFs (fails if the directory is empty).
 cd .. && PDFGEN_CHECK_DIR=node/test-output cargo test -p pdfgen-core --test external_pdfs
 
-# npm licenses: shipped dependencies, then the whole tree including dev tools.
-cd node && npm run license-check && npm run license-check:all
+# npm licenses: every package in the lockfile against the seven-license allowlist.
+cd node && npm run license-check
 
 # Python: needs the release library above and qpdf on PATH. Standard library only.
 cd python && python3 -m unittest discover -s tests   # writes python/test-output/*.pdf
@@ -90,7 +90,7 @@ python3 tools/version-check.py                       # every manifest carries th
 ```
 
 The .NET build fails with a clear message if that library is missing. NuGet
-restores 13 test-only packages (MIT / Apache-2.0). To keep the NuGet cache and
+restores 13 test-only packages (MIT / Apache-2.0; listed in `dotnet/NOTICE.txt`). To keep the NuGet cache and
 dotnet's per-user files inside this directory instead of `~/.nuget` and
 `~/.dotnet`, set these first (`.dotnet-home/` is git-ignored):
 
@@ -509,14 +509,13 @@ pdfcpu version
 | Arlington PDF Model TSV subset (`core/tests/arlington/`, tests only) | Apache-2.0, `LICENSE` and `NOTICE.txt` kept beside the files, source commit in `SOURCE.txt` |
 | pdfcpu (optional external tool, not shipped) | Apache-2.0 |
 | Adobe core-14 AFM files (`core/afm/`) | Adobe's own notice, in `core/afm/LICENSE`: use, copy and distribute for any purpose if all copyright notices are kept and the AFM files are never distributed without that `LICENSE` file |
-| NuGet test packages (13) | MIT or Apache-2.0 |
+| NuGet test packages (13) | MIT or Apache-2.0; see `dotnet/NOTICE.txt` (`xunit.abstractions` 2.0.3 is Apache-2.0 by reference, see there) |
 | Python wrapper (`python/`) | no third-party packages; standard-library `ctypes` only |
 | Java wrapper (`java/`) | no runtime dependencies; `java.lang.foreign` only |
 | Maven test packages (4: `testng` 7.11.0, `jcommander` 1.83, `slf4j-api` 2.0.16, `jquery` 3.7.1) | Apache-2.0, Apache-2.0, MIT, MIT; test scope only, none shipped |
 | Go wrapper (`go/`) | no third-party modules; standard library and cgo only |
 | `koffi` 3.3.8 (Node wrapper, shipped dependency) | MIT |
 | `@koromix/koffi-linux-x64` 3.3.8 (koffi's prebuilt binary, shipped dependency) | MIT |
-| npm dev tools (`license-checker-rseidelsohn` and its dependencies, 130 packages in all, test and CI only) | ISC 55, MIT 48, BlueOak-1.0.0 12, Apache-2.0 9, BSD-2-Clause 2, BSD-3-Clause 1, CC-BY-3.0 1, CC0-1.0 1, (MIT AND CC-BY-3.0) 1 |
 
 `cargo deny check licenses` covers the Rust crates only. It cannot see the AFM
 files, the NuGet packages, the npm packages or the Maven packages. The Maven build
@@ -524,8 +523,8 @@ plugins are not covered by `java/license-check.py`. `go/license-check.sh` only
 confirms that the Go module has no third-party modules. The built shared library
 links dynamically against glibc and `libgcc_s` (`ldd target/release/libpdfgen_ffi.so`).
 
-The npm check on shipped dependencies uses the seven-license allowlist (MIT,
-Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib) and exits 0. The
-dev-tool tree contains BlueOak-1.0.0, CC-BY-3.0, CC0-1.0 and (MIT AND CC-BY-3.0)
-packages, so `npm run license-check:all` adds those four to the allowlist; with only
-the seven licenses it exits 1. None of the dev tools is shipped.
+`node/license-check.mjs` reads the `license` field of every package in
+`package-lock.json` (`koffi` and its 20 optional platform binaries, 21 in all) and
+exits 0 only if each is on the seven-license allowlist. It trusts the registry's
+field; it does not read license files. An `AND`, `WITH` or missing license fails. The
+node project has no dev dependencies.
