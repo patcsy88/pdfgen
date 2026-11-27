@@ -504,6 +504,34 @@ fn jpeg_header_parsing_and_rejection() {
     assert!(matches!(Image::jpeg(j12), Err(Error::BadJpeg(m)) if m.contains("12")));
 }
 
+/// SOI, then one frame header per `markers` entry (each 8-bit, 1 component, 16x16), then EOI.
+fn jpeg_frames(markers: &[u8]) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xD8];
+    for m in markers {
+        v.extend_from_slice(&[0xFF, *m, 0x00, 0x0B, 8, 0x00, 0x10, 0x00, 0x10, 0x01, 0x01, 0x11, 0x00]);
+    }
+    v.extend_from_slice(&[0xFF, 0xD9]);
+    v
+}
+
+#[test]
+fn jpeg_with_decoy_or_unsupported_frames_is_rejected() {
+    // One baseline frame is the control.
+    assert!(Image::jpeg(jpeg_frames(&[0xC0])).is_ok());
+    // An arithmetic-coded, lossless or hierarchical frame must not hide behind a later baseline one.
+    for first in [0xC3u8, 0xC5, 0xC9, 0xCA, 0xCD] {
+        assert!(matches!(Image::jpeg(jpeg_frames(&[first, 0xC0])), Err(Error::BadJpeg(m)) if m.contains("unsupported")), "SOF 0x{first:02X} then SOF0");
+        assert!(matches!(Image::jpeg(jpeg_frames(&[first])), Err(Error::BadJpeg(_))), "SOF 0x{first:02X} alone");
+    }
+    // A second baseline or progressive frame header is just as ambiguous.
+    assert!(matches!(Image::jpeg(jpeg_frames(&[0xC0, 0xC0])), Err(Error::BadJpeg(m)) if m.contains("more than one")));
+    assert!(matches!(Image::jpeg(jpeg_frames(&[0xC2, 0xC0])), Err(Error::BadJpeg(m)) if m.contains("more than one")));
+    // DHT, JPG and DAC use marker bytes inside the SOF range but are not frame headers.
+    let mut with_dht = vec![0xFF, 0xD8, 0xFF, 0xC4, 0x00, 0x03, 0x00];
+    with_dht.extend_from_slice(&jpeg_frames(&[0xC0])[2..]);
+    assert!(Image::jpeg(with_dht).is_ok());
+}
+
 #[test]
 fn explicit_page_breaks_make_pages() {
     let mut d = Document::new();

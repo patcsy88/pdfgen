@@ -187,6 +187,7 @@ fn parse_jpeg(b: &[u8]) -> Result<(u32, u32, u8), Error> {
         return Err(Error::BadJpeg("missing SOI marker".into()));
     }
     let mut i = 2;
+    let mut frame = None;
     while i + 4 <= b.len() {
         if b[i] != 0xFF {
             return Err(Error::BadJpeg("expected marker".into()));
@@ -201,7 +202,17 @@ fn parse_jpeg(b: &[u8]) -> Result<(u32, u32, u8), Error> {
             continue;
         }
         let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
-        if matches!(m, 0xC0..=0xC2) {
+        // SOF0-SOF15 minus DHT (C4), JPG (C8) and DAC (CC). A decoder uses one frame header, so a second one,
+        // or one for a coding process this code does not describe, would let a decoy frame pass the checks below.
+        if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+            if frame.is_some() {
+                return Err(Error::BadJpeg("more than one frame header".into()));
+            }
+            if m > 0xC2 {
+                return Err(Error::BadJpeg(format!(
+                    "SOF marker 0x{m:02X} unsupported, only baseline and progressive Huffman (SOF0-SOF2)"
+                )));
+            }
             if i + 9 + 1 > b.len() || len < 8 {
                 return Err(Error::BadJpeg("truncated SOF".into()));
             }
@@ -215,14 +226,13 @@ fn parse_jpeg(b: &[u8]) -> Result<(u32, u32, u8), Error> {
             if w == 0 || h == 0 {
                 return Err(Error::BadJpeg("zero dimension".into()));
             }
-            return Ok((w, h, n));
-        }
-        if m == 0xDA {
+            frame = Some((w, h, n));
+        } else if m == 0xDA {
             break;
         }
         i += 2 + len;
     }
-    Err(Error::BadJpeg("no SOF0-SOF2 marker found".into()))
+    frame.ok_or_else(|| Error::BadJpeg("no SOF0-SOF2 marker found".into()))
 }
 
 #[derive(Debug, Clone)]

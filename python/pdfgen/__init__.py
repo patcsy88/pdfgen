@@ -213,7 +213,8 @@ class PdfDocument(_Handle):
         with self._use() as h:
             _check(_n.doc_render(h, C.byref(data), C.byref(length)))
         try:
-            return C.string_at(data.value, length.value)
+            # string_at takes a C int size and would cut anything over 2 GiB.
+            return bytes((C.c_ubyte * length.value).from_address(data.value))
         finally:
             _n.buffer_free(data, length.value)
 

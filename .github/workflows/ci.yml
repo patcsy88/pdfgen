@@ -138,6 +138,8 @@ jobs:
         working-directory: go
       - run: go test -race -count=1 ./...
         working-directory: go
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
       - run: PDFGEN_CHECK_DIR=go/test-output cargo test -p pdfgen-core --test external_pdfs --locked
       - run: ./license-check.sh
         working-directory: go

@@ -20,7 +20,7 @@ Run from the repo root. Wrapper tests need `cargo build --release -p ffi` first,
 | Node | `cd node && npm ci && npm test` |
 | Python | `cd python && python3 -W error -m unittest discover -s tests` |
 | Java | `cd java && mvn -B test` |
-| Go | `cd go && go test -race -count=1 ./...` |
+| Go | `cd go && LD_LIBRARY_PATH=../target/release go test -race -count=1 ./...` |
 | .NET | `cd dotnet && dotnet test` |
 
 Run only the check that covers your change, not every one of them.

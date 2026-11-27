@@ -8,7 +8,7 @@
 package pdfgen
 
 /*
-#cgo linux LDFLAGS: -L${SRCDIR}/../target/release -lpdfgen_ffi -Wl,-rpath,${SRCDIR}/../target/release
+#cgo linux LDFLAGS: -L${SRCDIR}/../target/release -lpdfgen_ffi
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -39,6 +39,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -317,7 +318,11 @@ func (d *Document) Render() ([]byte, error) {
 			return err
 		}
 		defer C.pdfgen_buffer_free(data, n)
-		pdf = C.GoBytes(unsafe.Pointer(data), C.int(n))
+		if uint64(n) > uint64(math.MaxInt) {
+			return fmt.Errorf("pdfgen: rendered output of %d bytes does not fit in a Go slice", uint64(n))
+		}
+		pdf = make([]byte, int(n))
+		copy(pdf, unsafe.Slice((*byte)(unsafe.Pointer(data)), int(n)))
 		return nil
 	})
 	if err != nil {

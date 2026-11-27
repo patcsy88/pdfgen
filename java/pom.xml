@@ -26,6 +26,8 @@
     <!-- java.lang.foreign is final from Java 22; built and tested on 25. -->
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- The tests load this release build; override with -Dpdfgen.lib=... on other platforms. -->
+    <pdfgen.lib>${project.basedir}/../target/release/libpdfgen_ffi.so</pdfgen.lib>
   </properties>
 
   <dependencies>
@@ -51,6 +53,9 @@
         <configuration>
           <!-- Linker.downcallHandle is a restricted method; Java 24+ warns without this flag. -->
           <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+          <environmentVariables>
+            <PDFGEN_LIB>${pdfgen.lib}</PDFGEN_LIB>
+          </environmentVariables>
         </configuration>
       </plugin>
     </plugins>

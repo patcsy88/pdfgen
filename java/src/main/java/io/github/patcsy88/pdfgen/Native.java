@@ -37,21 +37,13 @@ final class Native {
     }
 
     private static Path libraryPath() {
-        // PDFGEN_LIB overrides the default: the workspace's release build, found by walking up from the cwd.
+        // No search: a directory walk from the cwd would load whatever library sits in a parent directory.
         String override = System.getenv("PDFGEN_LIB");
-        if (override != null && !override.isEmpty()) {
-            return Path.of(override);
+        if (override == null || override.isEmpty()) {
+            throw new UnsatisfiedLinkError("PDFGEN_LIB is not set; set it to the path of "
+                    + System.mapLibraryName("pdfgen_ffi") + " (`cargo build --release -p ffi` builds it in target/release/)");
         }
-        String file = System.mapLibraryName("pdfgen_ffi");
-        for (Path dir = Path.of("").toAbsolutePath(); dir != null; dir = dir.getParent()) {
-            Path candidate = dir.resolve("target").resolve("release").resolve(file);
-            if (Files.isRegularFile(candidate)) {
-                return candidate;
-            }
-        }
-        throw new UnsatisfiedLinkError("pdfgen native library " + file
-                + " not found under target/release/ of the working directory or its parents;"
-                + " run `cargo build --release -p ffi` or set PDFGEN_LIB");
+        return Path.of(override);
     }
 
     private final SymbolLookup lib;

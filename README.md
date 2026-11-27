@@ -82,7 +82,7 @@ cd .. && PDFGEN_CHECK_DIR=java/test-output cargo test -p pdfgen-core --test exte
 cd java && python3 license-check.py                  # every Maven package, test scope included
 
 # Go: needs the release library above, Go, a C compiler (cgo) and qpdf on PATH. Standard library only.
-cd go && go test ./...                               # writes go/test-output/*.pdf
+cd go && LD_LIBRARY_PATH=../target/release go test ./...   # writes go/test-output/*.pdf
 cd .. && PDFGEN_CHECK_DIR=go/test-output cargo test -p pdfgen-core --test external_pdfs
 cd go && ./license-check.sh                          # fails if any third-party module appears
 python3 tools/abi-check.py                           # every wrapper declares the same C ABI as ffi/src/lib.rs
@@ -251,8 +251,9 @@ native memory; a `Cleaner` frees anything left over. A closed object throws
 `IllegalStateException`. A document or table is not thread-safe for concurrent builds; use one per thread.
 `close()` waits for a native call in flight on another thread.
 
-The library is found at `target/release/libpdfgen_ffi.so` by walking up from the
-working directory; set `PDFGEN_LIB` to load it from elsewhere. The Surefire
+The library is not searched for: set `PDFGEN_LIB` to its path, or the first call throws
+`UnsatisfiedLinkError`. Surefire sets it to `target/release/libpdfgen_ffi.so`; override with
+`-Dpdfgen.lib=...`. The Surefire
 configuration passes `--enable-native-access=ALL-UNNAMED` to the JVM; running without
 that flag was not tested. The build sets `maven.compiler.release` to 25, and the tests
 ran on JDK 25.0.5.1 only; the API is final from Java 22, but 22 to 24 are untested. On
@@ -304,9 +305,10 @@ The library keeps its last error message per OS thread, so each failing call and
 read of its message run on one locked OS thread. The test
 `TestErrorMessagesDoNotLeakBetweenGoroutines` exercises this under 16 goroutines.
 
-The cgo link flags point at `target/release/` in this repository and add it to the
-rpath, so `go test` and binaries built here find the library without
-`LD_LIBRARY_PATH`. A binary run from elsewhere needs the library on its loader path.
+The cgo link flags add `target/release/` of this repository to the linker search path
+only. They set no rpath, which would bake this build directory into every binary and let
+the loader pick it over system directories. `go test` and any binary built here need the
+library on the loader path at run time, e.g. `LD_LIBRARY_PATH=target/release`.
 The tests ran on Go 1.27.4, also under `-race`; the `go 1.24` directive is a floor
 that was not tested on 1.24. Only Linux is declared in the cgo flags.
 
