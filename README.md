@@ -63,7 +63,7 @@ minor release because some input that v0.1.1 rendered is now rejected: see the l
 | `qpdf` | the tests call `qpdf --check` on every PDF they produce | 11.3.0 |
 | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) | license, advisory, ban and source checks | 0.22.1 |
 | .NET SDK 10 | the wrapper and its tests | 10.0.404 |
-| Node.js | the Node wrapper and its tests (`engines` is `>=24`) | 26.13.1, not 24: see [Use from Node.js](#use-from-nodejs) |
+| Node.js | the Node wrapper and its tests (`engines` is `>=24`) | 26.13.1 locally; CI runs 24: see [Use from Node.js](#use-from-nodejs) |
 | Python 3 | the Python wrapper and its tests (`requires-python` is `>=3.10`); also regenerates font data | 3.11.2 |
 | JDK 25 | the Java wrapper and its tests (`maven.compiler.release` is 25) | 25.0.5.1 (Microsoft build) |
 | Maven | building and testing `java/` | 3.8.7 |
@@ -549,7 +549,8 @@ pdfcpu version
 | pdfgen (this repository) | MIT OR Apache-2.0 |
 | `miniz_oxide` 0.8.9 (Flate compression) | MIT OR Zlib OR Apache-2.0 |
 | `adler2` 2.0.1 (via `miniz_oxide`) | 0BSD OR MIT OR Apache-2.0 |
-| `lopdf` 0.42 and its dependencies (tests only, dev-dependency); this includes `miniz_oxide` 0.9.1 | MIT; `miniz_oxide` MIT OR Zlib OR Apache-2.0; checked by `cargo deny` |
+| `lopdf` 0.42.0 (tests only, dev-dependency) | MIT |
+| `lopdf`'s dependencies (tests only), including `miniz_oxide` 0.9.1 | mostly MIT and/or Apache-2.0; `encoding_rs` also BSD-3-Clause and the `unicode-*` crates also Unicode-3.0; checked by `cargo deny` |
 | Arlington PDF Model TSV subset (`core/tests/arlington/`, tests only) | Apache-2.0, `LICENSE` and `NOTICE.txt` kept beside the files, source commit in `SOURCE.txt` |
 | pdfcpu (optional external tool, not shipped) | Apache-2.0 |
 | Adobe core-14 AFM files (`core/afm/`) | Adobe's own notice, in `core/afm/LICENSE`: use, copy and distribute for any purpose if all copyright notices are kept and the AFM files are never distributed without that `LICENSE` file |
