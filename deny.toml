@@ -12,3 +12,21 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
+
+[advisories]
+# A known vulnerability always fails the check. A yanked release means the author withdrew that exact
+# version, so it fails too instead of only warning.
+yanked = "deny"
+
+[bans]
+# A wildcard version requirement (`*`) accepts any release, including one published after this review.
+# Path dependencies inside the workspace have no version to pin.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io: no other registry and no git dependency.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

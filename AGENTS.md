@@ -13,7 +13,7 @@ Run from the repo root. Wrapper tests need `cargo build --release -p ffi` first,
 | What | Command |
 |---|---|
 | Rust tests | `cargo test --workspace --locked` |
-| Rust licenses | `cargo deny check licenses` |
+| Rust licenses, advisories, bans, sources | `cargo deny check` |
 | C ABI sync, all 7 sites | `python3 tools/abi-check.py` |
 | Version sync, all 8 sites | `python3 tools/version-check.py` |
 | Font data is current | `python3 tools/gen_fontdata.py --check` |

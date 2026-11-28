@@ -15,7 +15,7 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
 | `dotnet/PdfGen.Tests/` | xunit tests that call the native library through the wrapper |
 | `core/afm/` | Adobe AFM font metrics used for text widths, plus their license |
 | `tools/gen_fontdata.py` | regenerates `core/src/fontdata.rs` from `core/afm/` |
-| `deny.toml` | license allowlist for `cargo deny` |
+| `deny.toml` | license allowlist, advisory, ban and source policy for `cargo deny` |
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
 | Rust (rustc + cargo) | everything | 1.100.0 |
 | C and C++ compiler (`cc`, `c++`) | linking Rust binaries; the header test in `ffi/tests/c_header.rs` compiles C99 and C++17 | gcc and g++ 12.2 |
 | `qpdf` | the tests call `qpdf --check` on every PDF they produce | 11.3.0 |
-| [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) | license check | 0.22.1 |
+| [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) | license, advisory, ban and source checks | 0.22.1 |
 | .NET SDK 10 | the wrapper and its tests | 10.0.404 |
 | Node.js | the Node wrapper and its tests (`engines` is `>=24`) | 26.13.1, not 24: see [Use from Node.js](#use-from-nodejs) |
 | Python 3 | the Python wrapper and its tests (`requires-python` is `>=3.10`); also regenerates font data | 3.11.2 |
@@ -55,8 +55,8 @@ All commands run from the repository root.
 # Rust: core + ffi tests (22 + 5). Needs qpdf on PATH.
 cargo test --workspace
 
-# License check against deny.toml.
-cargo deny check licenses
+# License, advisory, ban and source checks against deny.toml.
+cargo deny check
 
 # The native library the .NET tests load. It must exist before `dotnet test`.
 cargo build --release -p ffi            # -> target/release/libpdfgen_ffi.so
@@ -109,7 +109,7 @@ Test PDFs are left in `target/tmp/` (Rust) and next to the test assembly
 
 `.github/workflows/ci.yml` runs on pushes to `main`, on pushes of tags `v*` and `go/v*`,
 and on pull requests: one job each for Rust (tests, `tools/abi-check.py`,
-`tools/version-check.py`, `cargo deny check licenses`), .NET, Node.js, Python (3.10 and
+`tools/version-check.py`, `cargo deny check`), .NET, Node.js, Python (3.10 and
 3.13), Java and Go (1.24 and stable). Each wrapper job builds the release library, runs
 the wrapper's tests and, except .NET, the `external_pdfs` checks.
 Every action is pinned to a commit SHA. The workflow passes `actionlint` and the same

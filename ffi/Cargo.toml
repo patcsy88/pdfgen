@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+# Shipped as the built libpdfgen_ffi shared object, never as a crate: `ffi` is not a name to claim on crates.io.
+publish = false
 
 # Library name differs from the package name so the shared object is
 # libpdfgen_ffi.so, not libffi.so (which collides with the system libffi).
