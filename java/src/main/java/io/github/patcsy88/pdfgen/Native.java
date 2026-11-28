@@ -43,7 +43,8 @@ final class Native {
             throw new UnsatisfiedLinkError("PDFGEN_LIB is not set; set it to the path of "
                     + System.mapLibraryName("pdfgen_ffi") + " (`cargo build --release -p ffi` builds it in target/release/)");
         }
-        return Path.of(override);
+        // Absolute, so the existence check and the load name the same file whatever a JDK does with a relative path.
+        return Path.of(override).toAbsolutePath().normalize();
     }
 
     private final SymbolLookup lib;
