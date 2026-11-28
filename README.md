@@ -394,6 +394,32 @@ The Node tests write every PDF to `node/test-output/` (git-ignored) and require
 code, so they run separately over that directory with the `external_pdfs` test shown
 under Build and test.
 
+## Threading
+
+The rule is the same in every language, because all five wrappers call the one Rust engine
+through the C ABI: the library is thread-safe, documents and tables are not, and independent
+documents can be built at the same time.
+
+- **Library:** documents share no mutable state. The only process-wide data is the read-only
+  font metrics, so separate documents can be built and rendered at the same time on separate
+  threads, with no locking on your side.
+- **Document or table:** do not build one from several threads at once. Create one per thread
+  (per goroutine in Go, per worker in Node.js). An object can move to another thread between
+  calls, but two threads must not use it at the same time.
+- **Closing:** in .NET, Python, Java and Go, closing or disposing from another thread, and the
+  finalizer or cleaner, waits for a native call in flight on that object instead of freeing
+  memory under it. C callers must make sure no call is in flight before `*_free`.
+- **Errors:** the last error message is kept per OS thread. The wrappers read it on the thread
+  that made the failing call (Go locks the OS thread for this). C callers must call
+  `pdfgen_last_error()` on the same thread.
+- **Python:** native calls go through `ctypes.CDLL`, which releases the GIL, so documents on
+  separate threads render in parallel.
+- **Node.js:** each worker thread creates and renders its own documents. A document belongs to
+  the worker that created it.
+
+There is no generator or factory object: each `PdfDocument` (or `Document` in Rust and Go) is
+already independent of every other.
+
 ## C ABI
 
 Library name `pdfgen_ffi`. C and C++ programs include `ffi/include/pdfgen.h`, which is
