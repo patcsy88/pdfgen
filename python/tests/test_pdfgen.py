@@ -334,7 +334,9 @@ class LibraryPathTests(unittest.TestCase):
         """Imports a copy of the package placed at `package_dir` under a scratch repo that has an ffi/Cargo.toml
         and, unless the caller removes it, a file where the checkout layout would look for the library."""
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            # Resolved: the subprocess builds the library path from Path(__file__).resolve(), so a symlinked
+            # temp directory (macOS /tmp, a symlinked TMPDIR) would otherwise never match `planted` below.
+            root = Path(tmp).resolve()
             dest = root / package_dir / "pdfgen"
             shutil.copytree(Path(_native.__file__).parent, dest, ignore=shutil.ignore_patterns("__pycache__"))
             (root / "ffi").mkdir()
