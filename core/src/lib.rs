@@ -566,9 +566,12 @@ impl<'a> Layout<'a> {
             for (n, line) in lines.iter().enumerate() {
                 let y = top - CELL_PAD - (n as f32 + 1.0) * lh + size * 0.2 + (lh - size) / 2.0;
                 self.put_text(x + CELL_PAD, y, font, size, line);
+                // Checked per line: a cell holds up to hundreds of lines of ~0.5 MB each, and the cap must stop
+                // the writing before the whole cell is in memory. Every cell has at least one line, so this also
+                // covers the cell's border and shading.
+                self.check_size()?;
             }
             x += w;
-            self.check_size()?;
         }
         self.y = top - h;
         Ok(())
