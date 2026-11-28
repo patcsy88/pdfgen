@@ -163,7 +163,7 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "ffi"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "pdfgen-core",
 ]
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "pdfgen-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "lopdf",
  "miniz_oxide 0.8.9",

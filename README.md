@@ -36,23 +36,26 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
   checks, and seeded random-input tests. CI runs Rust, .NET, Node.js (24 and 26), Python (3.10 and 3.13), Java and Go
   (1.24 and stable) on pushes to `main` and on pull requests.
 - **Source release only:** nothing is published to crates.io, NuGet, npm, PyPI or Maven. Go clients use
-  `go get github.com/patcsy88/pdfgen/go@v0.2.0`.
+  `go get github.com/patcsy88/pdfgen/go@v0.2.1`.
 
 ### Release history
 
-The latest release is [v0.2.0](https://github.com/patcsy88/pdfgen/releases/tag/v0.2.0) (2026-11-28); the
-previous one is [v0.1.1](https://github.com/patcsy88/pdfgen/releases/tag/v0.1.1) (2026-11-27). v0.2.0 is a
-minor release because some input that v0.1.1 rendered is now rejected: see the limits in the first row.
-`git log v0.2.0..HEAD` lists anything pushed to `main` since.
+The latest release is [v0.2.1](https://github.com/patcsy88/pdfgen/releases/tag/v0.2.1) (2026-11-28). Earlier ones are
+[v0.2.0](https://github.com/patcsy88/pdfgen/releases/tag/v0.2.0) (2026-11-28) and
+[v0.1.1](https://github.com/patcsy88/pdfgen/releases/tag/v0.1.1) (2026-11-27). v0.2.0 was a minor release
+because some input that v0.1.1 rendered is now rejected: see the limits in the first row. v0.2.1 adds no new
+limits. `git log v0.2.1..HEAD` lists anything pushed to `main` since.
 
-| Area | In v0.1.1 | Added in v0.2.0 |
-|---|---|---|
-| Input limits | Text size at most 618.33 pt; column width above 8 pt; NaN, infinite and non-positive sizes and widths rejected; a table row taller than a page together with its header (`RowTooTall`); non-8-bit JPEG | Text and table font size at least 1; at most 256 columns; at most 10000 pages; at most 256 MiB of page content plus image data; JPEG at most 100 Mpx |
-| JPEG | 8-bit baseline or progressive gray/RGB, embedded unchanged | Frame header length checked, an SOS marker required; second or unsupported frame headers and short segments rejected |
-| Memory | | Wrapping stops at what a page can hold, so a huge cell no longer allocates every line first; image bytes count toward the cap; a tiny image keeps a valid matrix |
-| Native library lookup | | Python and Node use the `target/release` default only in a source checkout; `PDFGEN_LIB` is made absolute in Python, Node and Java; .NET loads from the assembly directory only |
-| Handles and I/O | Go and Java no longer free a handle during a native call | Native handles guarded against copy and close races; Python `save()` keeps an existing file when the render fails; hostile `bytes`, `Uint8Array` or `Array` subclasses can no longer desync a length; .NET throws `ArgumentNullException` for a null row |
-| Dependency policy | | `cargo deny check` (licenses, advisories, bans, sources) in CI |
+| Area | In v0.1.1 | Added in v0.2.0 | Added in v0.2.1 |
+|---|---|---|---|
+| Input limits | Text size at most 618.33 pt; column width above 8 pt; NaN, infinite and non-positive sizes and widths rejected; a table row taller than a page together with its header (`RowTooTall`); non-8-bit JPEG | Text and table font size at least 1; at most 256 columns; at most 10000 pages; at most 256 MiB of page content plus image data; JPEG at most 100 Mpx | |
+| JPEG | 8-bit baseline or progressive gray/RGB, embedded unchanged | Frame header length checked, an SOS marker required; second or unsupported frame headers and short segments rejected | |
+| Layout | | | A table header moves to the next page with its first row, so it is no longer drawn alone at the bottom of a page and repeated above that row |
+| Memory | | Wrapping stops at what a page can hold, so a huge cell no longer allocates every line first; image bytes count toward the cap; a tiny image keeps a valid matrix | The content cap is checked after every line of a table cell, so one huge cell can pass it by about a line instead of a whole cell |
+| Native library lookup | | Python and Node use the `target/release` default only in a source checkout; `PDFGEN_LIB` is made absolute in Python, Node and Java; .NET loads from the assembly directory only | Python and Node use the default only for the real `<repo>/python/pdfgen` and `<repo>/node/src` layouts; a vendored copy anywhere else needs `PDFGEN_LIB` |
+| Handles and I/O | Go and Java no longer free a handle during a native call | Native handles guarded against copy and close races; Python `save()` keeps an existing file when the render fails; hostile `bytes`, `Uint8Array` or `Array` subclasses can no longer desync a length; .NET throws `ArgumentNullException` for a null row | |
+| Dependency policy | | `cargo deny check` (licenses, advisories, bans, sources) in CI | |
+| CI | | | Node tests on 24 and 26; checkouts do not persist the token; `tools/gen_fontdata.py --check` runs |
 
 ## Prerequisites
 
