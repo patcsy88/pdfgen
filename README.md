@@ -33,7 +33,7 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
 - **Errors instead of broken PDFs:** out-of-range sizes, widths, tables and images are rejected with an error
   and never written (limits in the table below).
 - **Validated output:** every test PDF goes through `qpdf --check`, the Arlington model and content-stream
-  checks, and seeded random-input tests. CI runs Rust, .NET, Node.js, Python (3.10 and 3.13), Java and Go
+  checks, and seeded random-input tests. CI runs Rust, .NET, Node.js (24 and 26), Python (3.10 and 3.13), Java and Go
   (1.24 and stable) on pushes to `main` and on pull requests.
 - **Source release only:** nothing is published to crates.io, NuGet, npm, PyPI or Maven. Go clients use
   `go get github.com/patcsy88/pdfgen/go@v0.2.0`.
@@ -63,7 +63,7 @@ minor release because some input that v0.1.1 rendered is now rejected: see the l
 | `qpdf` | the tests call `qpdf --check` on every PDF they produce | 11.3.0 |
 | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) | license, advisory, ban and source checks | 0.22.1 |
 | .NET SDK 10 | the wrapper and its tests | 10.0.404 |
-| Node.js | the Node wrapper and its tests (`engines` is `>=24`) | 26.13.1 locally; CI runs 24: see [Use from Node.js](#use-from-nodejs) |
+| Node.js | the Node wrapper and its tests (`engines` is `>=24`) | 26.13.1 locally; CI runs 24 and 26: see [Use from Node.js](#use-from-nodejs) |
 | Python 3 | the Python wrapper and its tests (`requires-python` is `>=3.10`); also regenerates font data | 3.11.2 |
 | JDK 25 | the Java wrapper and its tests (`maven.compiler.release` is 25) | 25.0.5.1 (Microsoft build) |
 | Maven | building and testing `java/` | 3.8.7 |
@@ -146,11 +146,11 @@ Test PDFs are left in `target/test-pdfs/` (Rust) and next to the test assembly
 
 `.github/workflows/ci.yml` runs on pushes to `main`, on pushes of tags `v*` and `go/v*`,
 and on pull requests: one job each for Rust (tests, `tools/abi-check.py`,
-`tools/version-check.py`, `cargo deny check`), .NET, Node.js, Python (3.10 and
+`tools/version-check.py`, `cargo deny check`), .NET, Node.js (24 and 26), Python (3.10 and
 3.13), Java and Go (1.24 and stable). Each wrapper job builds the release library, runs
 the wrapper's tests and, except .NET, the `external_pdfs` checks.
 Every action is pinned to a commit SHA. The workflow passes `actionlint` and runs green on GitHub,
-including the Temurin JDK 25 build, Node 24 and Python 3.10.
+including the Temurin JDK 25 build, Python 3.10, and Node 24 and 26.
 
 ## Releasing
 
@@ -383,7 +383,7 @@ repository, and only when the package sits in a source checkout (importing it fr
 throws); set `PDFGEN_LIB` to load it from elsewhere (a relative path is resolved against the current
 directory).
 
-CI runs the Node tests on Node 24; locally they ran on Node 26.13.1. `package.json` declares
+CI runs the Node tests on Node 24 and 26; locally they ran on Node 26.13.1. `package.json` declares
 `"node": ">=24"`.
 
 The Node tests write every PDF to `node/test-output/` (git-ignored) and require
