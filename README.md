@@ -146,7 +146,7 @@ Test PDFs are left in `target/test-pdfs/` (Rust) and next to the test assembly
 
 `.github/workflows/ci.yml` runs on pushes to `main`, on pushes of tags `v*` and `go/v*`,
 and on pull requests: one job each for Rust (tests, `tools/abi-check.py`,
-`tools/version-check.py`, `cargo deny check`), .NET, Node.js (24 and 26), Python (3.10 and
+`tools/version-check.py`, `tools/gen_fontdata.py --check`, `cargo deny check`), .NET, Node.js (24 and 26), Python (3.10 and
 3.13), Java and Go (1.24 and stable). Each wrapper job builds the release library, runs
 the wrapper's tests and, except .NET, the `external_pdfs` checks.
 Every action is pinned to a commit SHA. The workflow passes `actionlint` and runs green on GitHub,
