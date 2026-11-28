@@ -31,6 +31,10 @@ const MIN_FONT_SIZE: f32 = 1.0;
 const MAX_PAGES: usize = 10_000;
 /// Most uncompressed page-content bytes `render` lays out before failing with [`Error::TooLarge`].
 const MAX_CONTENT_BYTES: usize = 256 << 20;
+// The xref writes every offset in the 10 digits the format fixes, so a file may not reach 10^10 bytes. The
+// output is the deflated page content plus the image data, both counted against `MAX_CONTENT_BYTES` (deflate
+// grows incompressible input by well under 1%), plus font tables and per-object overhead of a few MiB.
+const _: () = assert!(MAX_CONTENT_BYTES as u64 * 2 < 10_000_000_000);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -748,8 +752,8 @@ impl Writer {
         let n = self.offsets.last().map(|o| o.0).unwrap_or(0) + 1;
         let xref = self.buf.len();
         self.buf.extend_from_slice(format!("xref\n0 {n}\n0000000000 65535 f \n").as_bytes());
-        for (id, off) in &self.offsets {
-            debug_assert_eq!(*id, self.offsets.iter().position(|o| o.0 == *id).unwrap() + 1);
+        for (i, (id, off)) in self.offsets.iter().enumerate() {
+            debug_assert_eq!(*id, i + 1, "object ids must be contiguous from 1 for the xref to be in id order");
             self.buf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
         }
         // ISO 32000-2 14.4: /ID is required in PDF 2.0, two byte strings of at least
