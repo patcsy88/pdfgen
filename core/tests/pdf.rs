@@ -255,6 +255,7 @@ fn non_finite_or_out_of_range_dimensions_are_rejected_not_written() {
         (vec![50.0], f32::NAN),
         (vec![50.0], -0.0),
         (vec![50.0], 0.5),
+        (vec![9.0; 257], 10.0), // one column more than MAX_COLUMNS
     ] {
         let mut d = Document::new();
         d.add_table(table(widths.clone(), size));
@@ -273,6 +274,13 @@ fn non_finite_or_out_of_range_dimensions_are_rejected_not_written() {
     d.add_table(table(vec![8.5], 1.0));
     d.add_image(Image::gray(2, 2, vec![0, 1, 2, 3]).unwrap(), 1e30);
     write_and_check("dimension_limits.pdf", &d);
+}
+
+#[test]
+fn table_with_the_maximum_column_count_renders() {
+    let mut d = Document::new();
+    d.add_table(Table { column_widths: vec![9.0; 256], header: None, rows: vec![vec!["a".into()]], font_size: 10.0 });
+    assert!(d.render().is_ok());
 }
 
 /// Renders `d` and returns the result with the time it took, in seconds.
@@ -346,11 +354,12 @@ fn page_count_is_capped_at_10000() {
 
 #[test]
 fn page_content_is_capped() {
-    // 4000 columns of 8.01pt and 8000 empty rows, about 16 KB of input: every row strokes 4000 cell borders,
-    // about 150 KB of content. Old code laid out all 8000 rows (about 1.2 GB of content streams; 2.7 GB RSS
-    // and 68 s in a release build). Now layout stops once the content passes 256 MiB, after about 1800 rows.
+    // 256 columns (the most allowed) of 8.01pt and 40000 empty rows, about 1 MB of input: every row strokes 256 cell
+    // borders, about 10 KB of content. Without the cap that is about 400 MB of content streams; now layout stops
+    // once the content passes 256 MiB, after about 27000 rows. 4000 columns, the old version of this test, is
+    // rejected up front: see `non_finite_or_out_of_range_dimensions_are_rejected_not_written`.
     let mut d = Document::new();
-    d.add_table(Table { column_widths: vec![8.01; 4000], header: None, rows: vec![vec![]; 8000], font_size: 1.0 });
+    d.add_table(Table { column_widths: vec![8.01; 256], header: None, rows: vec![vec![]; 40_000], font_size: 1.0 });
     let (r, secs) = timed_render(&d);
     assert!(matches!(&r, Err(Error::TooLarge(m)) if m.contains("bytes")), "{:?}", r.map(|b| b.len()));
     assert!(secs < 20.0, "took {secs:.1} s");

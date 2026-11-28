@@ -24,6 +24,9 @@ const MAX_FONT_SIZE: f32 = 1000.0;
 const MAX_TEXT_SIZE: f32 = (PAGE_H - 2.0 * MARGIN) / LEADING;
 /// Largest x coordinate `render` lets a table reach.
 const MAX_COORD: f32 = 32767.0;
+/// Most columns a table may have. Every row draws a rectangle per column, empty cells included, so without a
+/// bound a few thousand columns and a long run of empty rows fill `MAX_CONTENT_BYTES` from a few KB of input.
+const MAX_COLUMNS: usize = 256;
 /// Smallest text or table font size `render` accepts. Without a lower bound a tiny size puts a whole input
 /// on one line, and the per-line work (and the page count a tall line needs) is no longer bounded by the input.
 const MIN_FONT_SIZE: f32 = 1.0;
@@ -322,8 +325,9 @@ impl Document {
     ///
     /// Fails with [`Error::BadDimension`] before any layout if a text size is not in `[1, 618.33]` (one line
     /// as tall as the page's text area), a table font size is not in `[1, 1000]`, a column width is not
-    /// finite and above 8 (twice the cell padding), the columns together reach beyond x = 32767,
-    /// or an image width is not positive and finite. An image wider than the text area is scaled down.
+    /// finite and above 8 (twice the cell padding), the columns together reach beyond x = 32767, a table
+    /// has more than 256 columns, or an image width is not positive and finite. An image wider than the text
+    /// area is scaled down.
     ///
     /// Fails with [`Error::RowTooTall`] if a table row, together with the table's header if it has one,
     /// is taller than a page.
@@ -367,6 +371,12 @@ fn check_dim(what: &str, v: f32, min: f32, max: f32) -> Result<(), Error> {
 }
 
 fn check_table_dims(t: &Table) -> Result<(), Error> {
+    if t.column_widths.len() > MAX_COLUMNS {
+        return Err(Error::BadDimension(format!(
+            "table has {} columns, more than {MAX_COLUMNS}",
+            t.column_widths.len()
+        )));
+    }
     check_dim("table font size", t.font_size, MIN_FONT_SIZE, MAX_FONT_SIZE)?;
     for w in &t.column_widths {
         check_dim("column width", *w, 0.0, MAX_COORD)?;

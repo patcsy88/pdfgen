@@ -102,7 +102,8 @@ int32_t pdfgen_doc_add_table(PdfgenDoc *doc, const PdfgenTable *t);
  * pdfgen_buffer_free(*out_data, *out_len). On failure *out_data is NULL and *out_len is 0. Besides the
  * row-width case above, it fails with PDFGEN_ERR_CORE when a text size is below 1 or above 618.33, a
  * table font size is below 1 or above 1000, a column width is at most 8 or above 32767, the column
- * widths add up to more than 32717, a table row (together with the header) is taller than a page, or
+ * widths add up to more than 32717, a table has more than 256 columns, a table row (together with the
+ * header) is taller than a page, or
  * the layout needs more than 10000 pages or 256 MiB of uncompressed page content and image data, or an
  * image would render with a zero-sized side. The document is not
  * consumed: it can be changed and rendered again. */
