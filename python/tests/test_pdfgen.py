@@ -228,6 +228,15 @@ class ImageTests(unittest.TestCase):
         self.assertIn("/ColorSpace /DeviceGray", text)
         self.assertIn("/Width 16", text)
 
+    def test_a_bytes_subclass_is_sent_with_its_real_length_not_its_len(self):
+        class Lying(bytes):
+            def __len__(self):
+                return 100_000  # far past the 12 real bytes
+
+        with PdfDocument() as doc:
+            doc.add_raw_image(2, 2, 3, Lying(b"\x80" * 12), 50)
+            self.assertTrue(doc.render().startswith(b"%PDF-2.0"))
+
     def test_embeds_a_jpeg_unchanged_and_qpdf_can_decode_it(self):
         jpeg = gray_jpeg(64, 32)
         path = checked("jpeg.pdf", render(lambda d: d.add_jpeg(jpeg, 128)))
@@ -296,6 +305,22 @@ class PageTests(unittest.TestCase):
             doc.save(OUT / "saved.pdf")
             self.assertEqual((OUT / "saved.pdf").read_bytes(), doc.render())
         checked("saved_check.pdf", (OUT / "saved.pdf").read_bytes())
+
+    def test_a_failed_save_keeps_the_existing_file_and_creates_none(self):
+        good, fresh = OUT / "kept.pdf", OUT / "never_created.pdf"
+        fresh.unlink(missing_ok=True)
+        with PdfDocument() as doc:
+            doc.add_text("kept")
+            doc.save(good)
+        before = good.read_bytes()
+        for path in (good, fresh):
+            with PdfDocument() as bad, PdfTable([50]) as table:
+                table.add_row("a", "b")  # more cells than columns: fails when the document is laid out
+                bad.add_table(table)
+                with self.assertRaises(PdfError):
+                    bad.save(path)
+        self.assertEqual(good.read_bytes(), before)
+        self.assertFalse(fresh.exists())
 
 
 class LifecycleTests(unittest.TestCase):

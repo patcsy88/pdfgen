@@ -210,6 +210,24 @@ describe('tables', () => {
     }
   });
 
+  it('sizes the table from the widths it copied, not from a lying array', () => {
+    class Liar extends Array {
+      *[Symbol.iterator]() {
+        yield 40; // one width, although length says four
+      }
+    }
+    const t = new PdfTable(Liar.of(10, 20, 30, 40));
+    const doc = new PdfDocument();
+    try {
+      t.addRow('a', 'b'); // two cells: only a one-column table rejects this at layout
+      doc.addTable(t);
+      assert.throws(() => doc.render(), (e) => e instanceof PdfError && e.code === -4 && /more cells than columns/.test(e.message));
+    } finally {
+      t.dispose();
+      doc.dispose();
+    }
+  });
+
   it('rejects bad table arguments', () => {
     assert.throws(() => new PdfTable([]), (e) => e instanceof PdfError && e.code === -3);
     assert.throws(() => new PdfTable([0], 10), PdfError);
@@ -258,6 +276,15 @@ describe('images', () => {
 
   it('accepts a Uint8Array as well as a Buffer', () => {
     checked('image_u8.pdf', render((d) => d.addRawImage(4, 4, 1, new Uint8Array(16), 40)));
+  });
+
+  it('sends the real size of a Uint8Array subclass that lies about its length', () => {
+    class Liar extends Uint8Array {
+      get length() {
+        return 100000; // far past the 12 real bytes
+      }
+    }
+    checked('image_liar.pdf', render((d) => d.addRawImage(2, 2, 3, new Liar(12), 40)));
   });
 
   it('rejects invalid images with the native message', () => {

@@ -46,6 +46,10 @@ function requireNonNegativeInt(value, name) {
   return value;
 }
 
+// `length` of a typed array as the engine stores it. A subclass can override the `length` property, and the
+// native side is given this count together with a pointer to the real storage, so the property cannot be used.
+const typedArrayLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'length').get;
+
 // Frees native objects that were never disposed explicitly.
 const docs = new FinalizationRegistry((h) => n.pdfgen_doc_free(h));
 const tables = new FinalizationRegistry((h) => n.pdfgen_table_free(h));
@@ -57,7 +61,10 @@ export class PdfTable {
   /** @param {number[]} columnWidths widths in points @param {number} [fontSize] */
   constructor(columnWidths, fontSize = 10) {
     if (!Array.isArray(columnWidths)) throw new TypeError('columnWidths must be an array of numbers');
-    const handle = n.pdfgen_table_new(Float32Array.from(columnWidths), columnWidths.length, fontSize);
+    const widths = Float32Array.from(columnWidths);
+    // The count is the length of the array the native side reads, not columnWidths.length: an Array subclass
+    // can iterate fewer values than it reports, and the native side would read past the typed array.
+    const handle = n.pdfgen_table_new(widths, widths.length, fontSize);
     if (handle === null) throw new PdfError(ERR_ARG, lastError());
     this.#handle = handle;
     tables.register(this, handle, this);
@@ -128,13 +135,13 @@ export class PdfDocument {
     requireNonNegativeInt(height, 'height');
     requireNonNegativeInt(channels, 'channels');
     if (!(pixels instanceof Uint8Array)) throw new TypeError('pixels must be a Buffer or Uint8Array');
-    check(n.pdfgen_doc_add_image_raw(this.#h, width, height, channels, pixels, pixels.length, widthPt));
+    check(n.pdfgen_doc_add_image_raw(this.#h, width, height, channels, pixels, typedArrayLength.call(pixels), widthPt));
     return this;
   }
 
   addJpeg(jpeg, widthPt) {
     if (!(jpeg instanceof Uint8Array)) throw new TypeError('jpeg must be a Buffer or Uint8Array');
-    check(n.pdfgen_doc_add_image_jpeg(this.#h, jpeg, jpeg.length, widthPt));
+    check(n.pdfgen_doc_add_image_jpeg(this.#h, jpeg, typedArrayLength.call(jpeg), widthPt));
     return this;
   }
 

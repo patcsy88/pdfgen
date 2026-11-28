@@ -71,10 +71,12 @@ def _uint32(value: int, name: str) -> int:
 
 
 def _buffer(data: bytes | bytearray | memoryview, name: str) -> bytes:
-    if isinstance(data, bytes):
+    if type(data) is bytes:
         return data
-    if isinstance(data, (bytearray, memoryview)):
-        return bytes(data)
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        # Read through the buffer protocol: a bytes subclass can override __len__ (and __bytes__), and the
+        # native side is handed the length of this value together with a pointer to its real storage.
+        return bytes(memoryview(data))
     raise TypeError(f"{name} must be bytes, bytearray or memoryview, not {type(data).__name__}")
 
 
@@ -93,6 +95,9 @@ class _Handle:
         self._handle: int | None = handle
         self._lock = threading.Lock()
         self._finalizer = weakref.finalize(self, type(self)._free, handle)
+        # Not at interpreter exit: that callback frees without the lock, while a daemon thread can still be
+        # inside a native call on this handle. The OS reclaims the memory at exit anyway.
+        self._finalizer.atexit = False
 
     @contextlib.contextmanager
     def _use(self):
@@ -224,6 +229,7 @@ class PdfDocument(_Handle):
             _n.buffer_free(data, length.value)
 
     def save(self, path: str | os.PathLike) -> None:
-        """Renders the document and writes it to `path`."""
+        """Renders the document and writes it to `path`. A failed render leaves an existing file untouched."""
+        pdf = self.render()
         with open(path, "wb") as f:
-            f.write(self.render())
+            f.write(pdf)

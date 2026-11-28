@@ -41,6 +41,7 @@ internal static class Interop
     /// <summary>Runs <paramref name="use"/> with NUL-terminated UTF-8 copies of <paramref name="cells"/>.</summary>
     internal static int WithUtf8(IReadOnlyList<string> cells, Func<IntPtr[], int> use)
     {
+        ArgumentNullException.ThrowIfNull(cells);
         foreach (var c in cells)
             NoNul(c ?? throw new ArgumentNullException(nameof(cells)), nameof(cells));
         var ptrs = new IntPtr[cells.Count];

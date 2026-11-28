@@ -132,6 +132,14 @@ public class PdfTests
     }
 
     [Fact]
+    public void ANullRowOrHeaderIsAnArgumentNullException()
+    {
+        using var table = new PdfTable(new[] { 50f });
+        Assert.Throws<ArgumentNullException>(() => table.AddRow(null!));
+        Assert.Throws<ArgumentNullException>(() => table.SetHeader(null!));
+    }
+
+    [Fact]
     public void InvalidTableArgumentsAreRejected()
     {
         Assert.Throws<PdfException>(() => new PdfTable(Array.Empty<float>()));
