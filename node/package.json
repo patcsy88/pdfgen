@@ -1,6 +1,6 @@
 {
   "name": "pdfgen",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Node.js bindings for pdfgen, loading the C ABI library through koffi",
   "license": "MIT OR Apache-2.0",
   "type": "module",

@@ -1,6 +1,6 @@
 # pdfgen
 
-Small PDF report generator in Rust with a C ABI and a .NET wrapper. It lays out
+Small PDF report generator in Rust with a C ABI and wrappers for .NET, Node.js, Python, Java and Go. It lays out
 wrapped text, tables (repeating header row across pages), RGB/gray/JPEG images
 and explicit page breaks, and writes a PDF 2.0 (ISO 32000-2) file.
 
@@ -13,9 +13,46 @@ Adobe font metrics in `core/afm/` have their own terms; see [Licenses](#licenses
 | `ffi/` | `ffi` package, built as `libpdfgen_ffi.so` (`.dylib`, `.dll`): C ABI over the core |
 | `dotnet/PdfGen/` | .NET 10 P/Invoke wrapper |
 | `dotnet/PdfGen.Tests/` | xunit tests that call the native library through the wrapper |
+| `node/` | Node.js wrapper (koffi) and its tests |
+| `python/` | Python wrapper (`ctypes`) and its tests |
+| `java/` | Java 25 wrapper (foreign function API) and its tests |
+| `go/` | Go wrapper (cgo) and its tests |
 | `core/afm/` | Adobe AFM font metrics used for text widths, plus their license |
 | `tools/gen_fontdata.py` | regenerates `core/src/fontdata.rs` from `core/afm/` |
 | `deny.toml` | license allowlist, advisory, ban and source policy for `cargo deny` |
+
+## Key features
+
+- **Layout:** wrapped text, tables whose header row repeats across pages, RGB, gray and JPEG images, and
+  explicit page breaks, on A4 pages with 50 pt margins. The output is PDF 2.0 and byte-identical for
+  identical input.
+- **Fonts:** Helvetica, Helvetica-Bold, Courier and Courier-Bold in WinAnsi (ASCII and Latin-1; any other
+  character is written as `?`). Nothing is embedded; widths come from Adobe's AFM files.
+- **One C ABI, five wrappers:** .NET, Node.js, Python, Java and Go call the same `libpdfgen_ffi`. Python and
+  Go use only their standard library; the Node wrapper's one dependency is koffi.
+- **Errors instead of broken PDFs:** out-of-range sizes, widths, tables and images are rejected with an error
+  and never written (limits in the table below).
+- **Validated output:** every test PDF goes through `qpdf --check`, the Arlington model and content-stream
+  checks, and seeded random-input tests. CI runs Rust, .NET, Node.js, Python (3.10 and 3.13), Java and Go
+  (1.24 and stable) on pushes to `main` and on pull requests.
+- **Source release only:** nothing is published to crates.io, NuGet, npm, PyPI or Maven. Go clients use
+  `go get github.com/patcsy88/pdfgen/go@v0.2.0`.
+
+### Release history
+
+The latest release is [v0.2.0](https://github.com/patcsy88/pdfgen/releases/tag/v0.2.0) (2026-11-28); the
+previous one is [v0.1.1](https://github.com/patcsy88/pdfgen/releases/tag/v0.1.1) (2026-11-27). v0.2.0 is a
+minor release because some input that v0.1.1 rendered is now rejected: see the limits in the first row.
+`git log v0.2.0..HEAD` lists anything pushed to `main` since.
+
+| Area | In v0.1.1 | Added in v0.2.0 |
+|---|---|---|
+| Input limits | Text size at most 618.33 pt; column width above 8 pt; NaN, infinite and non-positive sizes and widths rejected; a table row taller than a page together with its header (`RowTooTall`); non-8-bit JPEG | Text and table font size at least 1; at most 256 columns; at most 10000 pages; at most 256 MiB of page content plus image data; JPEG at most 100 Mpx |
+| JPEG | 8-bit baseline or progressive gray/RGB, embedded unchanged | Frame header length checked, an SOS marker required; second or unsupported frame headers and short segments rejected |
+| Memory | | Wrapping stops at what a page can hold, so a huge cell no longer allocates every line first; image bytes count toward the cap; a tiny image keeps a valid matrix |
+| Native library lookup | | Python and Node use the `target/release` default only in a source checkout; `PDFGEN_LIB` is made absolute in Python, Node and Java; .NET loads from the assembly directory only |
+| Handles and I/O | Go and Java no longer free a handle during a native call | Native handles guarded against copy and close races; Python `save()` keeps an existing file when the render fails; hostile `bytes`, `Uint8Array` or `Array` subclasses can no longer desync a length; .NET throws `ArgumentNullException` for a null row |
+| Dependency policy | | `cargo deny check` (licenses, advisories, bans, sources) in CI |
 
 ## Prerequisites
 
@@ -52,7 +89,7 @@ measured: nothing here has been built with a compiler older than 1.100.
 All commands run from the repository root.
 
 ```bash
-# Rust: core + ffi tests (22 + 5). Needs qpdf on PATH.
+# Rust: core + ffi tests (43 + 8). Needs qpdf on PATH.
 cargo test --workspace
 
 # License, advisory, ban and source checks against deny.toml.
@@ -102,7 +139,7 @@ cd dotnet && dotnet test
 Do not override `HOME` for this: cargo and rustup look for the toolchain there and
 fail with "no default toolchain" if it moves.
 
-Test PDFs are left in `target/tmp/` (Rust) and next to the test assembly
+Test PDFs are left in `target/test-pdfs/` (Rust) and next to the test assembly
 (`dotnet/PdfGen.Tests/bin/`), so you can open them.
 
 ## Continuous integration
@@ -112,10 +149,8 @@ and on pull requests: one job each for Rust (tests, `tools/abi-check.py`,
 `tools/version-check.py`, `cargo deny check`), .NET, Node.js, Python (3.10 and
 3.13), Java and Go (1.24 and stable). Each wrapper job builds the release library, runs
 the wrapper's tests and, except .NET, the `external_pdfs` checks.
-Every action is pinned to a commit SHA. The workflow passes `actionlint` and the same
-commands pass locally, but it has not yet run on GitHub: the first run may show
-failures that local runs cannot, such as the Temurin JDK 25 build, Node 24 and
-Python 3.10, none of which were tested locally.
+Every action is pinned to a commit SHA. The workflow passes `actionlint` and runs green on GitHub,
+including the Temurin JDK 25 build, Node 24 and Python 3.10.
 
 ## Releasing
 
@@ -186,7 +221,8 @@ doc.Save("report.pdf");       // or: byte[] pdf = doc.Render();
 Failures throw `PdfException` with the native message and the C error code in
 `Code`. `PdfDocument` is not thread-safe for concurrent builds; use one per thread. `Dispose` and the
 finalizer wait for a native call in flight on another thread. The native library
-must be next to your assembly or on the loader path; the test project copies it
+must be next to your assembly: it is loaded from the assembly directory only, not from the loader path
+or `PATH` (on Linux a copy on `LD_LIBRARY_PATH` is not found). The test project copies it
 from `target/release/`.
 
 ## Use from Python
@@ -212,10 +248,11 @@ Arguments ctypes would silently mangle (NUL in a string, an out-of-range unsigne
 integer) raise `ValueError` before reaching the library. Use `with` or `close()` to
 free native memory; a finalizer frees anything left over. A closed object raises
 `ValueError`. The library path defaults to `target/release/libpdfgen_ffi.so` in this
-repository, found relative to the package source. Run from a checkout (for example
-`PYTHONPATH=python`), or set `PDFGEN_LIB` to load the library from elsewhere; a
-`pip install ./python` copy has no repository next to it and needs `PDFGEN_LIB`.
-The tests ran on Python 3.11.2 only; `requires-python` is `>=3.10` but 3.10 is untested.
+repository, found relative to the package source, and only when the package sits in a source
+checkout; any other copy raises `OSError` on import. Run from a checkout (for example
+`PYTHONPATH=python`), or set `PDFGEN_LIB` to load the library from elsewhere (a relative path is
+resolved against the current directory); a `pip install ./python` copy has no repository next to it and
+needs `PDFGEN_LIB`. CI runs the tests on Python 3.10 and 3.13; locally they ran on Python 3.11.2.
 
 The Python tests write every PDF to `python/test-output/` (git-ignored) and require
 `qpdf --check` to pass on each. The Arlington and content-stream checks run
@@ -251,15 +288,16 @@ native memory; a `Cleaner` frees anything left over. A closed object throws
 `IllegalStateException`. A document or table is not thread-safe for concurrent builds; use one per thread.
 `close()` waits for a native call in flight on another thread.
 
-The library is not searched for: set `PDFGEN_LIB` to its path, or the first call throws
+The library is not searched for: set `PDFGEN_LIB` to its path (a relative path is resolved against the
+current directory), or the first call throws
 `UnsatisfiedLinkError`. Surefire sets it to `target/release/libpdfgen_ffi.so`; override with
 `-Dpdfgen.lib=...`. The Surefire
 configuration passes `--enable-native-access=ALL-UNNAMED` to the JVM; running without
 that flag was not tested. The build sets `maven.compiler.release` to 25, and the tests
-ran on JDK 25.0.5.1 only; the API is final from Java 22, but 22 to 24 are untested. On
+ran on JDK 25 only (Temurin in CI, Microsoft build 25.0.5.1 locally); the API is final from Java 22, but 22 to 24 are untested. On
 Debian with Microsoft's package feed: `sudo apt install msopenjdk-25 maven`.
 
-The Java tests (25) write every PDF to `java/test-output/` (git-ignored) and require
+The Java tests (27) write every PDF to `java/test-output/` (git-ignored) and require
 `qpdf --check` to pass on each. The Arlington and content-stream checks run
 separately over that directory with the `external_pdfs` test shown under Build and
 test. `license-check.py` reads each resolved package's license from its POM and
@@ -309,10 +347,10 @@ The cgo link flags add `target/release/` of this repository to the linker search
 only. They set no rpath, which would bake this build directory into every binary and let
 the loader pick it over system directories. `go test` and any binary built here need the
 library on the loader path at run time, e.g. `LD_LIBRARY_PATH=target/release`.
-The tests ran on Go 1.27.4, also under `-race`; the `go 1.24` directive is a floor
-that was not tested on 1.24. Only Linux is declared in the cgo flags.
+The tests ran on Go 1.27.4 locally, also under `-race`; CI runs Go 1.24, the `go 1.24` directive's floor, and the
+current stable release. Only Linux is declared in the cgo flags.
 
-The Go tests (24) write every PDF to `go/test-output/` (git-ignored) and require
+The Go tests (28) write every PDF to `go/test-output/` (git-ignored) and require
 `qpdf --check` to pass on each. The Arlington and content-stream checks run
 separately over that directory with the `external_pdfs` test shown under Build and
 test.
@@ -341,11 +379,12 @@ A non-string argument, or a string containing a NUL (which the C layer would
 silently truncate), throws `TypeError` before the call.
 Call `dispose()` (or use `using`) to free native memory; a finalizer frees anything
 left over. The library path defaults to `target/release/libpdfgen_ffi.so` in this
-repository; set `PDFGEN_LIB` to load it from elsewhere.
+repository, and only when the package sits in a source checkout (importing it from any other copy
+throws); set `PDFGEN_LIB` to load it from elsewhere (a relative path is resolved against the current
+directory).
 
-The goal asked for Node 24 LTS. Only Node 26.13.1 was available on the machine the
-wrapper was developed on, so the tests have **not** been run on Node 24.
-`package.json` declares `"node": ">=24"`.
+CI runs the Node tests on Node 24; locally they ran on Node 26.13.1. `package.json` declares
+`"node": ">=24"`.
 
 The Node tests write every PDF to `node/test-output/` (git-ignored) and require
 `qpdf --check` to pass on each. The Arlington and content-stream checks are Rust
@@ -510,7 +549,7 @@ pdfcpu version
 | pdfgen (this repository) | MIT OR Apache-2.0 |
 | `miniz_oxide` 0.8.9 (Flate compression) | MIT OR Zlib OR Apache-2.0 |
 | `adler2` 2.0.1 (via `miniz_oxide`) | 0BSD OR MIT OR Apache-2.0 |
-| `lopdf` 0.36 and its dependencies (tests only, dev-dependency) | MIT and/or Apache-2.0, checked by `cargo deny` |
+| `lopdf` 0.42 and its dependencies (tests only, dev-dependency); this includes `miniz_oxide` 0.9.1 | MIT; `miniz_oxide` MIT OR Zlib OR Apache-2.0; checked by `cargo deny` |
 | Arlington PDF Model TSV subset (`core/tests/arlington/`, tests only) | Apache-2.0, `LICENSE` and `NOTICE.txt` kept beside the files, source commit in `SOURCE.txt` |
 | pdfcpu (optional external tool, not shipped) | Apache-2.0 |
 | Adobe core-14 AFM files (`core/afm/`) | Adobe's own notice, in `core/afm/LICENSE`: use, copy and distribute for any purpose if all copyright notices are kept and the AFM files are never distributed without that `LICENSE` file |
