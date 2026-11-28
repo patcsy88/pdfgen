@@ -123,6 +123,15 @@ public class PdfTests
     }
 
     [Fact]
+    public void StringsWithNulAreRejectedNotTruncated()
+    {
+        using var doc = new PdfDocument();
+        Assert.Throws<ArgumentException>(() => doc.AddText("before\0after"));
+        using var table = new PdfTable(new[] { 50f });
+        Assert.Throws<ArgumentException>(() => table.AddRow("a\0b"));
+    }
+
+    [Fact]
     public void InvalidTableArgumentsAreRejected()
     {
         Assert.Throws<PdfException>(() => new PdfTable(Array.Empty<float>()));

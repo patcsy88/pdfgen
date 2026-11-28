@@ -46,7 +46,7 @@ pub enum Error {
     /// column width leaves no room inside its cell padding.
     BadDimension(String),
     /// The document would exceed `MAX_PAGES` (10 000) pages or `MAX_CONTENT_BYTES` (256 MiB) bytes of
-    /// uncompressed page content.
+    /// uncompressed page content and image data.
     TooLarge(String),
 }
 
@@ -109,7 +109,7 @@ impl Font {
     }
 
     pub fn text_width(self, s: &str, size: f32) -> f32 {
-        s.chars().map(|c| self.char_width(c)).sum::<u32>() as f32 * size / 1000.0
+        s.chars().map(|c| self.char_width(c) as u64).sum::<u64>() as f32 * size / 1000.0
     }
 }
 
@@ -324,8 +324,11 @@ impl Document {
     /// Fails with [`Error::RowTooTall`] if a table row, together with the table's header if it has one,
     /// is taller than a page.
     ///
+    /// Fails with [`Error::BadDimension`] during layout if an image would render with a side that
+    /// underflows to zero.
+    ///
     /// Fails with [`Error::TooLarge`] if the layout needs more than 10 000 pages or more than 256 MiB of
-    /// uncompressed page content; layout stops as soon as a limit is passed.
+    /// uncompressed page content and image data; layout stops as soon as a limit is passed.
     pub fn render(&self) -> Result<Vec<u8>, Error> {
         for b in &self.blocks {
             match b {
@@ -375,16 +378,25 @@ fn check_table_dims(t: &Table) -> Result<(), Error> {
 }
 
 /// Wraps each cell of `row` into its column and returns the lines plus the row height.
+///
+/// Wrapping stops at the first cell that already needs more than a page: the row is rejected as
+/// [`Error::RowTooTall`] whatever its other cells hold, so they are neither wrapped nor allocated.
 fn layout_row(row: &[String], is_header: bool, t: &Table) -> (Vec<Vec<String>>, f32) {
     let font = if is_header { Font::HelveticaBold } else { Font::Helvetica };
     let size = t.font_size;
-    let cells: Vec<Vec<String>> = t
-        .column_widths
-        .iter()
-        .enumerate()
-        .map(|(i, w)| wrap(row.get(i).map(String::as_str).unwrap_or(""), font, size, w - 2.0 * CELL_PAD))
-        .collect();
-    let lines = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    // One line more than fits a page: enough lines to be certain the row is too tall.
+    let max_lines = ((PAGE_H - 2.0 * MARGIN) / (size * LEADING)) as usize + 2;
+    let mut cells = Vec::with_capacity(t.column_widths.len());
+    let mut lines = 1;
+    for (i, w) in t.column_widths.iter().enumerate() {
+        let cell = wrap(row.get(i).map(String::as_str).unwrap_or(""), font, size, w - 2.0 * CELL_PAD, max_lines);
+        let n = cell.len();
+        lines = lines.max(n);
+        cells.push(cell);
+        if n >= max_lines {
+            break;
+        }
+    }
     (cells, lines as f32 * size * LEADING + 2.0 * CELL_PAD)
 }
 
@@ -399,6 +411,8 @@ struct Layout<'a> {
     done_bytes: usize,
     y: f32,
     images: Vec<&'a Image>,
+    /// Bytes of image data handed to `finish`; counted against `MAX_CONTENT_BYTES` with the page content.
+    image_bytes: usize,
 }
 
 impl<'a> Layout<'a> {
@@ -408,6 +422,7 @@ impl<'a> Layout<'a> {
             done_bytes: 0,
             y: PAGE_H - MARGIN,
             images: Vec::new(),
+            image_bytes: 0,
         }
     }
 
@@ -425,11 +440,11 @@ impl<'a> Layout<'a> {
         Ok(())
     }
 
-    /// Fails once the page content written so far passes `MAX_CONTENT_BYTES`.
+    /// Fails once the page content and image data written so far pass `MAX_CONTENT_BYTES`.
     fn check_size(&self) -> Result<(), Error> {
-        let total = self.done_bytes + self.pages.last().map_or(0, |p| p.content.len());
+        let total = self.done_bytes + self.pages.last().map_or(0, |p| p.content.len()) + self.image_bytes;
         if total > MAX_CONTENT_BYTES {
-            return Err(Error::TooLarge(format!("page content exceeds {MAX_CONTENT_BYTES} bytes")));
+            return Err(Error::TooLarge(format!("page content and image data exceed {MAX_CONTENT_BYTES} bytes")));
         }
         Ok(())
     }
@@ -459,7 +474,11 @@ impl<'a> Layout<'a> {
 
     fn text(&mut self, text: &str, font: Font, size: f32) -> Result<(), Error> {
         let lh = size * LEADING;
-        for line in wrap(text, font, size, PAGE_W - 2.0 * MARGIN) {
+        // More lines than the remaining pages can hold make `new_page` fail with `TooLarge`, so wrapping
+        // further would only allocate lines that are never placed.
+        let per_page = ((PAGE_H - 2.0 * MARGIN) / lh) as usize + 1;
+        let max_lines = (MAX_PAGES - self.pages.len() + 1) * per_page + 1;
+        for line in wrap(text, font, size, PAGE_W - 2.0 * MARGIN, max_lines) {
             if self.y - lh < MARGIN && !self.at_top() {
                 self.new_page()?;
             }
@@ -544,17 +563,26 @@ impl<'a> Layout<'a> {
             h = max_h;
             w = h * img.width as f32 / img.height as f32;
         }
+        if !(w > 0.0 && h > 0.0) {
+            return Err(Error::BadDimension(format!("image renders with a zero-sized side ({w} x {h})")));
+        }
         if self.y - h < MARGIN && !self.at_top() {
             self.new_page()?;
         }
         // Every block owns its own `Image`, so a pointer-identity lookup never hits: one XObject per block.
         self.images.push(img);
+        self.image_bytes += match &img.data {
+            ImageData::Rgb(d) | ImageData::Gray(d) => d.len(),
+            ImageData::Jpeg { bytes, .. } => bytes.len(),
+        };
         let idx = self.images.len() - 1;
         let y = self.y - h;
         let page = self.cur();
         page.images.push(idx);
+        // Two decimals, except for a side under 0.01 pt: `{:.2}` would print 0.00, a singular matrix.
+        let side = |v: f32| if v >= 0.01 { format!("{v:.2}") } else { format!("{v}") };
         page.content.extend_from_slice(
-            format!("q {:.2} 0 0 {:.2} {:.2} {:.2} cm /Im{} Do Q\n", w, h, MARGIN, y, idx + 1).as_bytes(),
+            format!("q {} 0 0 {} {:.2} {:.2} cm /Im{} Do Q\n", side(w), side(h), MARGIN, y, idx + 1).as_bytes(),
         );
         self.y = y - 8.0;
         self.check_size()
@@ -636,10 +664,12 @@ fn deflate(data: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec_zlib(data, 6)
 }
 
-/// Greedy word wrap; hard-breaks words wider than `max_w`. Always returns >= 1 line.
+/// Greedy word wrap; hard-breaks words wider than `max_w`. Returns between 1 and `max_lines` lines
+/// (`max_lines` must be at least 1). Once that many lines exist the rest of `text` is not wrapped, so the
+/// allocation is bounded by the caller's limit and not by the input size.
 ///
 /// Widths are tracked as running sums of per-character advances, so the cost is linear in `text`.
-fn wrap(text: &str, font: Font, size: f32, max_w: f32) -> Vec<String> {
+fn wrap(text: &str, font: Font, size: f32, max_w: f32, max_lines: usize) -> Vec<String> {
     let fits = |units: u64| units as f32 * size / 1000.0 <= max_w;
     let space = font.char_width(' ') as u64;
     let mut out = Vec::new();
@@ -659,6 +689,9 @@ fn wrap(text: &str, font: Font, size: f32, max_w: f32) -> Vec<String> {
             }
             if !line.is_empty() {
                 out.push(std::mem::take(&mut line));
+                if out.len() >= max_lines {
+                    return out;
+                }
             }
             let mut cur = String::new();
             let mut cur_units = 0u64;
@@ -666,6 +699,9 @@ fn wrap(text: &str, font: Font, size: f32, max_w: f32) -> Vec<String> {
                 let cw = font.char_width(ch) as u64;
                 if !cur.is_empty() && !fits(cur_units + cw) {
                     out.push(std::mem::take(&mut cur));
+                    if out.len() >= max_lines {
+                        return out;
+                    }
                     cur_units = 0;
                 }
                 cur.push(ch);
@@ -675,6 +711,9 @@ fn wrap(text: &str, font: Font, size: f32, max_w: f32) -> Vec<String> {
             line_units = cur_units;
         }
         out.push(line);
+        if out.len() >= max_lines {
+            return out;
+        }
     }
     out
 }

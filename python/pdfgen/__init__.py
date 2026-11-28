@@ -17,6 +17,10 @@ __all__ = ["Font", "PdfDocument", "PdfError", "PdfTable", "native_version"]
 _ERR_ARG = -3
 _ERR_CORE = -4
 
+_bytes_from_buffer = C.pythonapi.PyBytes_FromStringAndSize
+_bytes_from_buffer.restype = C.py_object
+_bytes_from_buffer.argtypes = (C.c_void_p, C.c_ssize_t)
+
 
 class Font(enum.IntEnum):
     """The four built-in faces. Values match the C ABI font codes."""
@@ -213,8 +217,9 @@ class PdfDocument(_Handle):
         with self._use() as h:
             _check(_n.doc_render(h, C.byref(data), C.byref(length)))
         try:
-            # string_at takes a C int size and would cut anything over 2 GiB.
-            return bytes((C.c_ubyte * length.value).from_address(data.value))
+            # `C.c_ubyte * n` would build and cache, for good, a new array type for every distinct PDF size, and
+            # string_at takes a C int size that cuts anything over 2 GiB; PyBytes_FromStringAndSize has neither.
+            return _bytes_from_buffer(data.value, length.value)
         finally:
             _n.buffer_free(data, length.value)
 

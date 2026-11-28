@@ -555,6 +555,30 @@ fn jpeg_structure_is_validated() {
 }
 
 #[test]
+fn text_width_does_not_overflow_on_long_strings() {
+    // 667 units per "A": 3.335e9 in total, past u32::MAX.
+    let w = Font::Helvetica.text_width(&"A".repeat(5_000_000), 1000.0);
+    assert!((w - 3.335e9).abs() < 1e3, "got {w}");
+}
+
+#[test]
+fn huge_cell_in_a_narrow_column_is_rejected_as_too_tall() {
+    // 0.5 pt inside the padding: every character is its own line.
+    let t = Table { column_widths: vec![8.5], header: None, rows: vec![vec!["x".repeat(2_000_000)]], font_size: 10.0 };
+    let mut d = Document::new();
+    d.add_table(t);
+    assert_eq!(d.render(), Err(Error::RowTooTall));
+}
+
+#[test]
+fn tiny_image_keeps_an_invertible_matrix() {
+    let mut d = Document::new();
+    d.add_image(Image::gray(1, 1, vec![0]).unwrap(), 0.001);
+    let p = write_and_check("tiny_image.pdf", &d);
+    assert!(contains(&qdf(&p), "q 0.001 0 0 0.001 "));
+}
+
+#[test]
 fn explicit_page_breaks_make_pages() {
     let mut d = Document::new();
     d.add_text("page one", Font::Helvetica, 12.0)

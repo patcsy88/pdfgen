@@ -31,14 +31,23 @@ internal static class Interop
     internal static string LastError() =>
         Marshal.PtrToStringUTF8(Native.pdfgen_last_error()) ?? "";
 
+    /// <summary>
+    /// Rejects a string the C side would read only up to its first NUL. The other wrappers refuse it too: a
+    /// silent cut would drop the rest of the text from the report.
+    /// </summary>
+    internal static string NoNul(string s, string paramName) =>
+        s.Contains('\0') ? throw new ArgumentException("string contains a NUL character", paramName) : s;
+
     /// <summary>Runs <paramref name="use"/> with NUL-terminated UTF-8 copies of <paramref name="cells"/>.</summary>
     internal static int WithUtf8(IReadOnlyList<string> cells, Func<IntPtr[], int> use)
     {
+        foreach (var c in cells)
+            NoNul(c ?? throw new ArgumentNullException(nameof(cells)), nameof(cells));
         var ptrs = new IntPtr[cells.Count];
         try
         {
             for (int i = 0; i < ptrs.Length; i++)
-                ptrs[i] = Marshal.StringToCoTaskMemUTF8(cells[i] ?? throw new ArgumentNullException(nameof(cells)));
+                ptrs[i] = Marshal.StringToCoTaskMemUTF8(cells[i]);
             return use(ptrs);
         }
         finally
@@ -128,6 +137,7 @@ public sealed class PdfDocument : IDisposable
     public PdfDocument AddText(string text, PdfFont font = PdfFont.Helvetica, float size = 12f)
     {
         ArgumentNullException.ThrowIfNull(text);
+        Interop.NoNul(text, nameof(text));
         lock (_gate)
         {
             var h = Handle;
