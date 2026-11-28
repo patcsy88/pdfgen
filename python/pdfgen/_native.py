@@ -12,11 +12,20 @@ _PREFIX = "" if sys.platform == "win32" else "lib"
 
 
 def _library_path() -> Path:
-    # PDFGEN_LIB overrides the default: the workspace's release build.
+    # PDFGEN_LIB overrides the default. Made absolute so the existence check and the load see the same file:
+    # a bare name would otherwise be handed to dlopen, which searches the loader path instead of the cwd.
     override = os.environ.get("PDFGEN_LIB")
     if override:
-        return Path(override)
+        return Path(override).resolve()
+    # The default is the workspace's release build, valid only in a source checkout. In an installed copy
+    # parents[2] is a directory shared with other packages; loading code from there would run whatever
+    # file a neighbouring package put at that path.
     repo = Path(__file__).resolve().parents[2]
+    if not (repo / "ffi" / "Cargo.toml").is_file():
+        raise OSError(
+            "pdfgen native library location is unknown: this copy of pdfgen is not in a source checkout; "
+            f"set PDFGEN_LIB to the path of {_PREFIX}pdfgen_ffi{_EXT}"
+        )
     return repo / "target" / "release" / f"{_PREFIX}pdfgen_ffi{_EXT}"
 
 

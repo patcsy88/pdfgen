@@ -1,16 +1,29 @@
 // Raw koffi declarations for the pdfgen_ffi C ABI. Use index.js instead.
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import koffi from 'koffi';
 
 const ext = { win32: '.dll', darwin: '.dylib' }[process.platform] ?? '.so';
 const prefix = process.platform === 'win32' ? '' : 'lib';
 
-// PDFGEN_LIB overrides the default: the workspace's release build.
-const libPath =
-  process.env.PDFGEN_LIB ??
-  join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'target', 'release', `${prefix}pdfgen_ffi${ext}`);
+// PDFGEN_LIB overrides the default. Made absolute so the existence check and the load see the same file:
+// a bare name would otherwise be handed to dlopen, which searches the loader path instead of the cwd.
+// The default is the workspace's release build, valid only in a source checkout. In an installed copy
+// `../..` is node_modules, shared with every other package; loading code from there would run whatever
+// file a neighbouring package put at that path.
+function libraryPath() {
+  if (process.env.PDFGEN_LIB) return resolve(process.env.PDFGEN_LIB);
+  const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  if (!existsSync(join(repo, 'ffi', 'Cargo.toml'))) {
+    throw new Error(
+      `pdfgen native library location is unknown: this copy of pdfgen is not in a source checkout; set PDFGEN_LIB to the path of ${prefix}pdfgen_ffi${ext}`,
+    );
+  }
+  return join(repo, 'target', 'release', `${prefix}pdfgen_ffi${ext}`);
+}
+
+const libPath = libraryPath();
 
 if (!existsSync(libPath)) {
   throw new Error(`pdfgen native library not found at ${libPath}; run \`cargo build --release -p ffi\` or set PDFGEN_LIB`);
