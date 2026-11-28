@@ -167,6 +167,48 @@ fn table_splits_across_pages_and_repeats_header() {
 }
 
 #[test]
+fn header_moves_to_the_next_page_with_its_first_row() {
+    // A 445pt line plus its paragraph gap leaves 742 - 1.6 * 445 = 30pt on the page. The one-line header
+    // (20pt) fits there, header plus first row (40pt) does not. The header used to be drawn alone at the
+    // bottom of page 1 and then repeated above the row on page 2.
+    let table = |font: f32| {
+        let mut d = Document::new();
+        d.add_text("x", Font::Helvetica, font);
+        d.add_table(Table {
+            column_widths: vec![100.0],
+            header: Some(vec!["HDR".into()]),
+            rows: vec![vec!["row".into()]],
+            font_size: 10.0,
+        });
+        d
+    };
+    let p = write_and_check("header_with_first_row.pdf", &table(445.0));
+    let q = String::from_utf8_lossy(&qdf(&p)).to_string();
+    assert_eq!(page_count(&p), 2);
+    assert_eq!(q.matches("(HDR) Tj").count(), 1, "the header is drawn once, with its row");
+    assert!(q.contains("(row) Tj"));
+    // Room for both (262pt left): header and row stay together on page 1.
+    let p = write_and_check("header_with_first_row_fits.pdf", &table(300.0));
+    let q = String::from_utf8_lossy(&qdf(&p)).to_string();
+    assert_eq!(page_count(&p), 1);
+    assert_eq!(q.matches("(HDR) Tj").count(), 1);
+    // Header and first row that fill the 78pt left (after a 446.25pt line) to the exact point: the fit test
+    // must round like the row loop does ((y - header) - row), or the header is drawn alone and then repeated.
+    let mut d = Document::new();
+    d.add_text("x", Font::Helvetica, 446.25);
+    d.add_table(Table {
+        column_widths: vec![100.0],
+        header: Some(vec!["H1\nH2".into()]),
+        rows: vec![vec!["R1\nR2\nR3".into()]],
+        font_size: 2.0,
+    });
+    let p = write_and_check("header_with_first_row_exact.pdf", &d);
+    let q = String::from_utf8_lossy(&qdf(&p)).to_string();
+    assert_eq!(q.matches("(H1) Tj").count(), 1, "the header is not drawn twice");
+    assert_eq!(page_count(&p), 2);
+}
+
+#[test]
 fn row_taller_than_page_under_header_is_rejected() {
     // Header (6 wrapped lines) plus a 60-line row exceed the text area; old code drew the row below the
     // bottom margin after repeating the header on a fresh page.

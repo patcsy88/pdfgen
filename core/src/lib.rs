@@ -522,9 +522,15 @@ impl<'a> Layout<'a> {
         if header_h > max_row_h {
             return Err(Error::RowTooTall);
         }
-        let rows = t.rows.iter().map(|r| layout_row(r, false, t));
+        let mut rows = t.rows.iter().map(|r| layout_row(r, false, t)).peekable();
         if let Some((cells, h)) = &header {
-            if self.y - h < MARGIN && !self.at_top() {
+            // The header goes with the first row: drawn alone at the bottom of a page it would be repeated
+            // above that row on the next one. A pair that cannot fit even a fresh page is rejected in the
+            // row loop below, so it is not worth a new page here.
+            let first_h = rows.peek().map_or(0.0, |(_, rh)| *rh);
+            // Subtract in the order the row loop below does, `(y - header) - row`: float32 rounds `y - (header +
+            // row)` differently when the pair fills the space exactly, and the header would be drawn anyway.
+            if self.y - h - first_h < MARGIN && !self.at_top() && h + first_h <= max_row_h {
                 self.new_page()?;
             }
             self.draw_row(cells, Font::HelveticaBold, size, *h, &t.column_widths, true)?;
