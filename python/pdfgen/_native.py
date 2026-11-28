@@ -17,11 +17,19 @@ def _library_path() -> Path:
     override = os.environ.get("PDFGEN_LIB")
     if override:
         return Path(override).resolve()
-    # The default is the workspace's release build, valid only in a source checkout. In an installed copy
-    # parents[2] is a directory shared with other packages; loading code from there would run whatever
-    # file a neighbouring package put at that path.
-    repo = Path(__file__).resolve().parents[2]
-    if not (repo / "ffi" / "Cargo.toml").is_file():
+    # The default is the workspace's release build, valid only in a source checkout, which has the layout
+    # <repo>/python/pdfgen/_native.py next to <repo>/ffi. Any other copy (installed, vendored) has some other
+    # directory two levels up, shared with other packages or workspaces; loading code from there would run
+    # whatever file sits at that path. The directory names are checked as well as ffi/Cargo.toml, so a copy
+    # that merely sits two levels below an unrelated Rust workspace does not match.
+    here = Path(__file__).resolve()
+    repo = here.parents[2]
+    in_checkout = (
+        here.parent.name == "pdfgen"
+        and here.parents[1].name == "python"
+        and (repo / "ffi" / "Cargo.toml").is_file()
+    )
+    if not in_checkout:
         raise OSError(
             "pdfgen native library location is unknown: this copy of pdfgen is not in a source checkout; "
             f"set PDFGEN_LIB to the path of {_PREFIX}pdfgen_ffi{_EXT}"

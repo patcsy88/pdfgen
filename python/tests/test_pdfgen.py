@@ -5,15 +5,19 @@ qpdf is not a PDF 2.0 conformance validator; see README.md for what the checks c
 """
 
 import copy
+import os
 import re
 import shutil
 import struct
 import subprocess
+import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
 
 from pdfgen import Font, PdfDocument, PdfError, PdfTable, native_version
+from pdfgen import _native
 
 OUT = Path(__file__).resolve().parents[1] / "test-output"
 
@@ -321,6 +325,41 @@ class PageTests(unittest.TestCase):
                     bad.save(path)
         self.assertEqual(good.read_bytes(), before)
         self.assertFalse(fresh.exists())
+
+
+class LibraryPathTests(unittest.TestCase):
+    """The default library path is used only for the real checkout layout <repo>/python/pdfgen."""
+
+    def _import_in(self, package_dir: str) -> tuple[subprocess.CompletedProcess, str]:
+        """Imports a copy of the package placed at `package_dir` under a scratch repo that has an ffi/Cargo.toml
+        and, unless the caller removes it, a file where the checkout layout would look for the library."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dest = root / package_dir / "pdfgen"
+            shutil.copytree(Path(_native.__file__).parent, dest, ignore=shutil.ignore_patterns("__pycache__"))
+            (root / "ffi").mkdir()
+            (root / "ffi" / "Cargo.toml").write_text('[package]\nname = "unrelated"\n')
+            lib = root / "target" / "release"
+            lib.mkdir(parents=True)
+            (lib / f"{_native._PREFIX}pdfgen_ffi{_native._EXT}").write_bytes(b"not a library")
+            env = {k: v for k, v in os.environ.items() if k != "PDFGEN_LIB"}
+            env["PYTHONPATH"] = str(root / package_dir)
+            planted = lib / f"{_native._PREFIX}pdfgen_ffi{_native._EXT}"
+            r = subprocess.run([sys.executable, "-c", "import pdfgen"], env=env, capture_output=True, text=True, cwd=root)
+            return r, str(planted)
+
+    def test_a_copy_two_levels_below_an_unrelated_workspace_does_not_load_its_library(self):
+        r, planted = self._import_in("vendor")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not in a source checkout", r.stderr)
+        self.assertNotIn(planted, r.stderr)  # the planted file was never handed to dlopen
+
+    def test_the_checkout_layout_still_selects_the_default_path(self):
+        r, planted = self._import_in("python")
+        self.assertNotEqual(r.returncode, 0)
+        # The layout matched, so the default path was used and CDLL's OSError names the planted file.
+        self.assertIn(planted, r.stderr)
+        self.assertNotIn("not in a source checkout", r.stderr)
 
 
 class LifecycleTests(unittest.TestCase):
