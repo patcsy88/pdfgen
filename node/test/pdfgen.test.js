@@ -4,10 +4,11 @@
 // qpdf is not a PDF 2.0 conformance validator; see README.md for what the checks cover.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { before, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Font, PdfDocument, PdfError, PdfTable } from '../src/index.js';
 
 const outDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'test-output');
@@ -376,5 +377,52 @@ describe('lifecycle', () => {
       const pdf = render((d) => d.addText(`doc ${i}`, Font.Courier, 10));
       assert.equal(pdf.subarray(0, 5).toString('latin1'), '%PDF-');
     }
+  });
+});
+
+describe('native library lookup', () => {
+  const nodeDir = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const libName = `${process.platform === 'win32' ? '' : 'lib'}pdfgen_ffi${{ win32: '.dll', darwin: '.dylib' }[process.platform] ?? '.so'}`;
+
+  /**
+   * Imports a copy of native.js placed at `<scratch>/<dir>/native.js`, in a scratch repo that has an ffi/Cargo.toml
+   * and a file where the checkout layout would look for the library, with PDFGEN_LIB unset.
+   */
+  function importCopy(dir) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdfgen-lookup-')));
+    try {
+      mkdirSync(join(root, dir), { recursive: true });
+      cpSync(join(nodeDir, 'src', 'native.js'), join(root, dir, 'native.js'));
+      symlinkSync(join(nodeDir, 'node_modules'), join(root, 'node_modules'), 'dir'); // so `koffi` resolves
+      mkdirSync(join(root, 'ffi'));
+      writeFileSync(join(root, 'ffi', 'Cargo.toml'), '[package]\nname = "unrelated"\n');
+      mkdirSync(join(root, 'target', 'release'), { recursive: true });
+      writeFileSync(join(root, 'target', 'release', libName), 'not a library');
+      const env = { ...process.env };
+      delete env.PDFGEN_LIB;
+      const url = pathToFileURL(join(root, dir, 'native.js')).href;
+      return spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(url)})`], {
+        encoding: 'utf8',
+        env,
+        cwd: root,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('does not load a library next to an unrelated workspace for a copy two levels below it', () => {
+    const r = importCopy('vendor/src');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /not in a source checkout/);
+    assert.doesNotMatch(r.stderr, /Failed to load shared library/); // the planted file never reached dlopen
+  });
+
+  it('still selects the default path for the real <repo>/node/src layout', () => {
+    const r = importCopy('node/src');
+    assert.notEqual(r.status, 0);
+    // The layout matched, so koffi was handed the planted file and rejected it.
+    assert.match(r.stderr, /Failed to load shared library/);
+    assert.doesNotMatch(r.stderr, /not in a source checkout/);
   });
 });

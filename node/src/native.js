@@ -1,6 +1,6 @@
 // Raw koffi declarations for the pdfgen_ffi C ABI. Use index.js instead.
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import koffi from 'koffi';
 
@@ -9,13 +9,18 @@ const prefix = process.platform === 'win32' ? '' : 'lib';
 
 // PDFGEN_LIB overrides the default. Made absolute so the existence check and the load see the same file:
 // a bare name would otherwise be handed to dlopen, which searches the loader path instead of the cwd.
-// The default is the workspace's release build, valid only in a source checkout. In an installed copy
-// `../..` is node_modules, shared with every other package; loading code from there would run whatever
-// file a neighbouring package put at that path.
+// The default is the workspace's release build, valid only in a source checkout, which has the layout
+// <repo>/node/src/native.js next to <repo>/ffi. Any other copy (installed, vendored) has some other directory
+// two levels up, shared with other packages (node_modules) or workspaces; loading code from there would run
+// whatever file sits at that path. The directory names are checked as well as ffi/Cargo.toml, so a copy that
+// merely sits two levels below an unrelated Rust workspace does not match.
 function libraryPath() {
   if (process.env.PDFGEN_LIB) return resolve(process.env.PDFGEN_LIB);
-  const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-  if (!existsSync(join(repo, 'ffi', 'Cargo.toml'))) {
+  const src = dirname(fileURLToPath(import.meta.url));
+  const pkg = dirname(src);
+  const repo = dirname(pkg);
+  const inCheckout = basename(src) === 'src' && basename(pkg) === 'node' && existsSync(join(repo, 'ffi', 'Cargo.toml'));
+  if (!inCheckout) {
     throw new Error(
       `pdfgen native library location is unknown: this copy of pdfgen is not in a source checkout; set PDFGEN_LIB to the path of ${prefix}pdfgen_ffi${ext}`,
     );
